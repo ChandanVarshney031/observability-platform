@@ -630,5 +630,6 @@ For issues:
 **Happy tracing! 🕵️** 
 
 Built with ❤️ using OpenTelemetry, Kafka, ClickHouse, Ollama, and React.
-#   o b s e r v a b i l i t y - p l a t f o r m  
+#   o b s e r v a b i l i t y - p l a t f o r m 
+ 
  
