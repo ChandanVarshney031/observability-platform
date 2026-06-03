@@ -1,0 +1,163 @@
+# =========================
+# Dependencies
+# =========================
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Build Outputs
+# =========================
+dist/
+build/
+out/
+.next/
+coverage/
+*.tsbuildinfo
+
+# React / Vite
+dashboard/dist/
+
+# =========================
+# Docker
+# =========================
+.docker/
+docker-data/
+*.tar
+
+# =========================
+# IDEs & Editors
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Testing
+# =========================
+coverage/
+.nyc_output/
+pytest_cache/
+.mypy_cache/
+
+# =========================
+# ClickHouse
+# =========================
+clickhouse-data/
+clickhouse-logs/
+
+# =========================
+# Kafka & Zookeeper
+# =========================
+kafka-data/
+zookeeper-data/
+
+# =========================
+# Redis
+# =========================
+redis-data/
+
+# =========================
+# OpenTelemetry
+# =========================
+otel-data/
+otel-collector.log
+
+# =========================
+# Jaeger
+# =========================
+jaeger-data/
+
+# =========================
+# Local Database Files
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# Terraform (future)
+# =========================
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# =========================
+# AWS
+# =========================
+.aws/
+
+# =========================
+# Secrets
+# =========================
+secrets/
+*.pem
+*.key
+*.crt
+id_rsa
+id_rsa.pub
+
+# =========================
+# Temporary Files
+# =========================
+tmp/
+temp/
+.cache/
+
+# =========================
+# Generated Reports
+# =========================
+reports/
+benchmarks/
+screenshots/
+
+# =========================
+# AI Models / Ollama
+# =========================
+models/
+ollama-data/
+
+# =========================
+# Misc
+# =========================
+*.pid
+*.seed
+*.pid.lock

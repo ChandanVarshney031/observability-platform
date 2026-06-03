@@ -1,0 +1,78 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+    
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 128
+
+  resource:
+    attributes:
+      actions:
+        - key: service.namespace
+          value: observability-platform
+          action: insert
+
+exporters:
+  kafka/traces:
+    brokers:
+      - kafka:9092
+    topic: otel.traces
+    encoding: otlp_proto
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  kafka/metrics:
+    brokers:
+      - kafka:9092
+    topic: otel.metrics
+    encoding: otlp_proto
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  kafka/logs:
+    brokers:
+      - kafka:9092
+    topic: otel.logs
+    encoding: otlp_proto
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  logging:
+    loglevel: debug
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [kafka/traces, logging]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [kafka/metrics, logging]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [kafka/logs, logging]
