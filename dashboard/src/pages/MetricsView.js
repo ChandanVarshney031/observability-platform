@@ -141,11 +141,11 @@ export default function MetricsView() {
                   <AlertTriangle className="w-5 h-5 text-amber-500" />
                   <span className="text-white font-medium">{alert.ServiceName}</span>
                   <span className="text-slate-300">
-                    p99 latency spike: <strong className="text-red-400">{(alert.p99_ns / 1_000_000).toFixed(0)}ms</strong> 
-                    {' '}(avg: {(alert.rolling_avg_p99 / 1_000_000).toFixed(0)}ms)
+                    p99 latency: <strong className="text-red-400">{Number(alert.p99_ms).toFixed(0)}ms</strong>
+                    {' '}| error rate: <strong className="text-amber-400">{Number(alert.error_rate_pct).toFixed(1)}%</strong>
                   </span>
                 </div>
-                <span className="text-slate-400 text-sm">{alert.Minute}</span>
+                <span className="text-slate-400 text-sm">{alert.MinuteStr}</span>
               </div>
             ))}
           </div>

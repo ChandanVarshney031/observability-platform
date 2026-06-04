@@ -27,18 +27,16 @@ function TraceDetail({ traceId, onClose }) {
     retry: false,
   });
 
-  if (isLoading) {
-    return <div className="p-8 text-center text-slate-400 border-t border-slate-700">Loading trace details...</div>;
-  }
+  const spanList = spans?.spans || [];
 
-  if (!spans || spans.length === 0) {
+  if (!spans || spanList.length === 0) {
     return <div className="p-8 text-center text-slate-400 border-t border-slate-700">No spans found for trace.</div>;
   }
 
-  // Calculate waterfall metrics
-  const minStartTime = Math.min(...spans.map(s => Number(s.StartTime)));
-  const maxEndTime = Math.max(...spans.map(s => Number(s.StartTime) + Number(s.Duration)));
-  const totalDuration = maxEndTime - minStartTime;
+  // Calculate waterfall metrics using nanosecond timestamps
+  const minStartTime = Math.min(...spanList.map(s => Number(s.StartTimeNano)));
+  const maxEndTime = Math.max(...spanList.map(s => Number(s.StartTimeNano) + Number(s.Duration)));
+  const totalDuration = maxEndTime - minStartTime || 1;
 
   // Simple color mapping
   const serviceColors = {
@@ -54,7 +52,7 @@ function TraceDetail({ traceId, onClose }) {
         <button onClick={onClose} className="text-slate-400 hover:text-white px-3 py-1 rounded bg-slate-700">Close</button>
       </div>
 
-      {insight && insight.root_cause && (
+      {insight && insight.insight && (
         <div className="mb-6 bg-slate-900 border border-slate-700 rounded-lg p-4">
           <div className="flex items-start gap-3">
             <div className="p-2 bg-indigo-500/20 rounded-lg">
@@ -64,14 +62,14 @@ function TraceDetail({ traceId, onClose }) {
               <h4 className="text-white font-semibold flex items-center gap-2">
                 AI Root Cause Analysis
                 <span className={`text-xs px-2 py-0.5 rounded ${
-                  insight.severity === 'critical' || insight.severity === 'high' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
+                  insight.insight.Severity === 'critical' || insight.insight.Severity === 'high' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
                 }`}>
-                  {insight.severity}
+                  {insight.insight.Severity}
                 </span>
               </h4>
-              <p className="text-slate-300 mt-1">{insight.root_cause}</p>
-              {insight.recommendation && (
-                <p className="text-slate-400 mt-2 text-sm"><strong className="text-slate-300">Recommendation:</strong> {insight.recommendation}</p>
+              <p className="text-slate-300 mt-1">{insight.insight.RootCause}</p>
+              {insight.insight.Recommendation && (
+                <p className="text-slate-400 mt-2 text-sm"><strong className="text-slate-300">Recommendation:</strong> {insight.insight.Recommendation}</p>
               )}
             </div>
           </div>
@@ -85,8 +83,9 @@ function TraceDetail({ traceId, onClose }) {
           <span>{(totalDuration / 1_000_000).toFixed(1)}ms</span>
         </div>
 
-        {spans.map(span => {
-          const startOffset = Number(span.StartTime) - minStartTime;
+        {isLoading && <div className="absolute inset-0 flex items-center justify-center text-slate-400">Loading trace details...</div>}
+        {spanList.map(span => {
+          const startOffset = Number(span.StartTimeNano) - minStartTime;
           const leftPct = (startOffset / totalDuration) * 100;
           const widthPct = Math.max((Number(span.Duration) / totalDuration) * 100, 0.5); // min width for visibility
           const colorClass = serviceColors[span.ServiceName] || 'bg-slate-500';

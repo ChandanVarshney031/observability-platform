@@ -1,5 +1,4 @@
-// Must import tracing FIRST, before any other code
-import './tracing.js';
+// Tracing is now loaded via Node CLI flag (--import)
 
 import express from 'express';
 import axios from 'axios';

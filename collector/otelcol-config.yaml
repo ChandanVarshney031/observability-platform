@@ -58,7 +58,7 @@ exporters:
       max_elapsed_time: 300s
 
   logging:
-    loglevel: debug
+    loglevel: warn
 
 service:
   pipelines:

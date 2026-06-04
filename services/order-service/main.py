@@ -4,6 +4,7 @@ import tracing  # noqa: F401
 import os
 import asyncio
 import random
+import time
 import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -67,7 +68,7 @@ async def get_order(order_id: str):
                 "success": True,
                 "order": order,
                 "service": "order-service",
-                "timestamp": asyncio.get_event_loop().time(),
+                "timestamp": time.time(),
             }
 
     except HTTPException:

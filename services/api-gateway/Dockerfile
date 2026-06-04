@@ -3,7 +3,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 COPY tracing.js app.js ./
 
@@ -13,4 +13,4 @@ ENV PORT=3000
 
 EXPOSE 3000
 
-CMD ["node", "app.js"]
+CMD ["node", "--import", "./tracing.js", "app.js"]

@@ -27,6 +27,14 @@ let metricsBatch = [];
 let logsBatch = [];
 
 /**
+ * Safely escape a string for ClickHouse SQL single-quoted values
+ */
+function escSql(value) {
+  if (typeof value !== 'string') return String(value ?? '');
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
  * Insert spans into ClickHouse
  */
 async function insertTraces(spans) {
@@ -43,16 +51,16 @@ async function insertTraces(spans) {
   const values = spans
     .map(
       (span) => `(
-      '${span.traceId}',
-      '${span.spanId}',
-      '${span.parentSpanId || ''}',
-      '${span.serviceName || 'unknown'}',
-      '${span.operationName || 'unknown'}',
+      '${escSql(span.traceId)}',
+      '${escSql(span.spanId)}',
+      '${escSql(span.parentSpanId || '')}',
+      '${escSql(span.serviceName || 'unknown')}',
+      '${escSql(span.operationName || 'unknown')}',
       ${span.startTimeUnixNano},
       ${span.endTimeUnixNano},
       ${span.durationNano},
       ${span.statusCode},
-      '${(span.statusMessage || '').replace(/'/g, "''")}',
+      '${escSql(span.statusMessage || '')}',
       {},
       {}
     )`

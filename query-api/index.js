@@ -45,6 +45,15 @@ async function queryClickHouse(sql, format = 'JSON') {
 }
 
 /**
+ * Helper: Safely escape a string value for ClickHouse SQL
+ * Prevents SQL injection by escaping single quotes and backslashes
+ */
+function escSql(value) {
+  if (typeof value !== 'string') return String(value);
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
  * Helper: Get from cache or execute query
  */
 async function cachedQuery(key, query, ttl = CACHE_TTL) {
@@ -72,6 +81,14 @@ async function cachedQuery(key, query, ttl = CACHE_TTL) {
 }
 
 /**
+ * Resolve time window string to ClickHouse interval expression
+ */
+function resolveWindow(window) {
+  const map = { '1h': '1 HOUR', '6h': '6 HOUR', '24h': '24 HOUR', '7d': '7 DAY' };
+  return map[window] || '1 HOUR';
+}
+
+/**
  * GET /api/traces
  * List recent traces with filtering
  */
@@ -82,17 +99,18 @@ app.get('/api/traces', async (req, res) => {
     let where = '1=1';
 
     if (service) {
-      where += ` AND ServiceName = '${service}'`;
+      where += ` AND ServiceName = '${escSql(service)}'`;
     }
 
     if (status === 'ok') {
-      where += ` AND StatusCode = 1`;
+      // Show all spans that did NOT result in an error (UNSET=0 or OK=1)
+      where += ` AND StatusCode != 2`;
     } else if (status === 'error') {
       where += ` AND StatusCode = 2`;
     }
 
     if (from && to) {
-      where += ` AND StartTime BETWEEN '${from}' AND '${to}'`;
+      where += ` AND StartTime BETWEEN '${escSql(from)}' AND '${escSql(to)}'`;
     }
 
     const sql = `
@@ -106,7 +124,7 @@ app.get('/api/traces', async (req, res) => {
       FROM traces
       WHERE ${where}
       ORDER BY StartTime DESC
-      LIMIT ${Math.min(parseInt(limit), 1000)}
+      LIMIT ${Math.min(parseInt(limit) || 100, 1000)}
     `;
 
     const result = await queryClickHouse(sql);
@@ -138,12 +156,15 @@ app.get('/api/traces/:traceId', async (req, res) => {
           ParentSpanId,
           ServiceName,
           OperationName,
-          formatDateTime(StartTime, '%Y-%m-%d %H:%M:%S') as StartTimeStr,
+          toInt64(StartTime) as StartTimeNano,
+          toInt64(EndTime) as EndTimeNano,
+          Duration,
           Duration / 1000000 as DurationMs,
           StatusCode,
-          StatusMessage
+          StatusMessage,
+          Attributes
         FROM traces
-        WHERE TraceId = '${traceId}'
+        WHERE TraceId = '${escSql(traceId)}'
         ORDER BY StartTime ASC
       `,
       300 // Cache trace details for 5 minutes
@@ -153,23 +174,11 @@ app.get('/api/traces/:traceId', async (req, res) => {
       return res.status(404).json({ error: 'Trace not found' });
     }
 
-    // Build tree structure
-    const spans = result.data;
-    const spansMap = Object.fromEntries(spans.map((s) => [s.SpanId, { ...s, children: [] }]));
-
-    const roots = [];
-    for (const span of spans) {
-      if (!span.ParentSpanId || !spansMap[span.ParentSpanId]) {
-        roots.push(spansMap[span.SpanId]);
-      } else {
-        spansMap[span.ParentSpanId].children.push(spansMap[span.SpanId]);
-      }
-    }
-
+    // Return flat list — frontend flattens for waterfall rendering
     res.json({
       traceId,
-      spanCount: spans.length,
-      root: roots[0] || null,
+      spanCount: result.data.length,
+      spans: result.data,
     });
   } catch (error) {
     console.error('Error fetching trace:', error.message);
@@ -232,10 +241,11 @@ app.get('/api/services', async (req, res) => {
 app.get('/api/metrics', async (req, res) => {
   try {
     const { service, window = '1h' } = req.query;
+    const interval = resolveWindow(window);
 
     let where = '1=1';
     if (service) {
-      where += ` AND ServiceName = '${service}'`;
+      where += ` AND ServiceName = '${escSql(service)}'`;
     }
 
     const sql = `
@@ -249,7 +259,7 @@ app.get('/api/metrics', async (req, res) => {
         error_count,
         error_rate_pct
       FROM service_latency
-      WHERE ${where} AND Minute > now() - INTERVAL 1 ${window.replace(/\d+/, '').toUpperCase() || 'HOUR'}
+      WHERE ${where} AND Minute > now() - INTERVAL ${interval}
       ORDER BY Minute ASC
     `;
 
@@ -266,7 +276,7 @@ app.get('/api/metrics', async (req, res) => {
 
 /**
  * GET /api/alerts
- * Active anomalies (when latency > 2x rolling average)
+ * Active anomalies (high error rate or latency > 500ms)
  */
 app.get('/api/alerts', async (req, res) => {
   try {
@@ -276,27 +286,20 @@ app.get('/api/alerts', async (req, res) => {
         formatDateTime(Minute, '%Y-%m-%d %H:%M:%S') as MinuteStr,
         p99_ns / 1000000 as p99_ms,
         total_requests,
+        error_count,
         error_rate_pct,
-        if(error_rate_pct > 5, 'high', 'medium') as severity
+        if(error_rate_pct > 10, 'critical', if(error_rate_pct > 5, 'high', 'medium')) as severity
       FROM service_latency
       WHERE Minute > now() - INTERVAL 1 HOUR
+        AND (error_rate_pct > 5 OR p99_ns > 500000000)
       ORDER BY Minute DESC
-      LIMIT 50
+      LIMIT 20
     `;
 
     const result = await queryClickHouse(sql);
-
-    // Filter: show only recent alerts (last 10 minutes)
-    const alerts = (result.data || [])
-      .filter((row) => {
-        // Include high error rates or high latency
-        return row.error_rate_pct > 5 || row.p99_ms > 500;
-      })
-      .slice(0, 20);
-
     res.json({
-      alerts,
-      count: alerts.length,
+      alerts: result.data || [],
+      count: (result.data || []).length,
     });
   } catch (error) {
     console.error('Error fetching alerts:', error.message);
@@ -305,8 +308,40 @@ app.get('/api/alerts', async (req, res) => {
 });
 
 /**
+ * GET /api/insights
+ * Fetch 10 most recent LLM-generated root cause insights (for AI sidebar)
+ */
+app.get('/api/insights', async (req, res) => {
+  try {
+    const sql = `
+      SELECT
+        TraceId,
+        ServiceName,
+        OperationName,
+        RootCause,
+        ImpactedSpans,
+        Recommendation,
+        Severity,
+        formatDateTime(AnalysedAt, '%Y-%m-%d %H:%M:%S') as AnalysedAt
+      FROM trace_insights
+      ORDER BY AnalysedAt DESC
+      LIMIT 10
+    `;
+
+    const result = await queryClickHouse(sql);
+    res.json({
+      insights: result.data || [],
+      count: (result.data || []).length,
+    });
+  } catch (error) {
+    console.error('Error fetching insights:', error.message);
+    res.status(503).json({ error: 'Failed to query insights', details: error.message });
+  }
+});
+
+/**
  * GET /api/insights/:traceId
- * Fetch LLM-generated root cause analysis for a trace
+ * Fetch LLM-generated root cause analysis for a specific trace
  */
 app.get('/api/insights/:traceId', async (req, res) => {
   try {
@@ -321,9 +356,9 @@ app.get('/api/insights/:traceId', async (req, res) => {
         ImpactedSpans,
         Recommendation,
         Severity,
-        formatDateTime(AnalysedAt, '%Y-%m-%d %H:%M:%S') as AnalysedAtStr
+        formatDateTime(AnalysedAt, '%Y-%m-%d %H:%M:%S') as AnalysedAt
       FROM trace_insights
-      WHERE TraceId = '${traceId}'
+      WHERE TraceId = '${escSql(traceId)}'
       LIMIT 1
     `;
 
@@ -360,7 +395,7 @@ app.get('/api/error-traces', async (req, res) => {
         StatusMessage,
         services_with_errors
       FROM error_traces
-      LIMIT ${Math.min(parseInt(limit), 100)}
+      LIMIT ${Math.min(parseInt(limit) || 50, 100)}
     `;
 
     const result = await queryClickHouse(sql);

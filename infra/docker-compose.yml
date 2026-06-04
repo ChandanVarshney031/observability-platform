@@ -10,11 +10,17 @@ services:
       - "2181:2181"
     networks:
       - observability
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   kafka:
     image: confluentinc/cp-kafka:7.5.3
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
@@ -32,19 +38,20 @@ services:
       retries: 5
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:24.3
     ports:
       - "8123:8123"
       - "9000:9000"
     environment:
-      CLICKHOUSE_DB: observability
+      CLICKHOUSE_DB: default
     volumes:
-      - ./infra/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # Path is relative to this docker-compose.yml file (which is inside infra/)
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
       - clickhouse_data:/var/lib/clickhouse
     networks:
       - observability
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:8123/ping"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,7 +72,7 @@ services:
     image: otel/opentelemetry-collector-contrib:0.92.0
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
-      - ./collector/otelcol-config.yaml:/etc/otel-collector-config.yaml
+      - ../collector/otelcol-config.yaml:/etc/otel-collector-config.yaml
     ports:
       - "4317:4317"   # OTLP gRPC receiver
       - "4318:4318"   # OTLP HTTP receiver
@@ -81,7 +88,7 @@ services:
     build:
       context: ./services/api-gateway
     ports:
-      - "3000:3000"
+      - "3000:3000"   # API Gateway on port 3000
     depends_on:
       otel-collector:
         condition: service_started
@@ -172,6 +179,11 @@ services:
       CACHE_TTL: 30
     networks:
       - observability
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   trace-analyser:
     build:
@@ -181,7 +193,7 @@ services:
       clickhouse:
         condition: service_healthy
       ollama:
-        condition: service_started
+        condition: service_healthy
     environment:
       CLICKHOUSE_URL: http://clickhouse:8123
       OLLAMA_URL: http://ollama:11434
@@ -198,22 +210,26 @@ services:
       - ollama_data:/root/.ollama
     environment:
       OLLAMA_HOST: "0.0.0.0:11434"
+    # Pre-pull llama3 on startup so trace-analyser works immediately
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama serve & sleep 10 && ollama pull llama3 && wait"]
     networks:
       - observability
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:11434/api/tags"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags | grep -q llama3"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
 
   dashboard:
     build:
       context: ./dashboard
     ports:
-      - "3000:3000"
+      - "8080:3000"   # Dashboard on 8080 — api-gateway occupies 3000
     depends_on:
       query-api:
-        condition: service_started
+        condition: service_healthy
     environment:
       REACT_APP_API_URL: http://localhost:4000
     networks:

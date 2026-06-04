@@ -1,5 +1,4 @@
-// Must import tracing FIRST
-import './tracing.js';
+// Tracing is now loaded via Node CLI flag (--import)
 
 import express from 'express';
 import { trace } from '@opentelemetry/api';

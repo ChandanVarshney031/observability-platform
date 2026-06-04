@@ -59,8 +59,8 @@ function buildPrompt(trace) {
   const spanList = trace.spans
     .map(
       (span, idx) =>
-        `${idx + 1}. [${span.2}] ${span.3} | Duration: ${span.4}ms | Status: ${span.5}${
-          span.6 ? ` | Error: ${span.6}` : ''
+        `${idx + 1}. [${span[2]}] ${span[3]} | Duration: ${span[4]}ms | Status: ${span[5]}${
+          span[6] ? ` | Error: ${span[6]}` : ''
         }`
     )
     .join('\n');

@@ -6,7 +6,6 @@ import TraceExplorer from './pages/TraceExplorer';
 import ServiceGraph from './pages/ServiceGraph';
 import MetricsView from './pages/MetricsView';
 import AIInsightsSidebar from './components/AIInsightsSidebar';
-import './App.css';
 
 const queryClient = new QueryClient();
 
