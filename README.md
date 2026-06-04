@@ -1,171 +1,134 @@
 # 🕵️ Distributed Tracing & Observability Platform
 
-A **production-ready** distributed tracing and observability platform with AI-powered anomaly detection. Built entirely with free/open-source technologies: OpenTelemetry, Kafka, ClickHouse, Ollama (llama3), and React.
+A **production-ready** distributed tracing and observability platform with AI-powered root cause analysis. Built entirely with free/open-source technologies — OpenTelemetry, Kafka, ClickHouse, Groq AI, and React.
 
-## 🎯 Quick Start
+> **Zero paid APIs. Zero proprietary SaaS. One `docker compose up`.**
+
+---
+
+## 🎯 Quick Start (5 minutes)
 
 ### Prerequisites
-- Docker & Docker Compose
-- Git
 
-### Start the entire stack (one command)
+| Tool | Version | Install |
+|------|---------|---------|
+| Docker Desktop | ≥ 24 | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
+| Git | any | [git-scm.com](https://git-scm.com/) |
+
+> ⚠️ **Docker Desktop needs at least 6 GB RAM.** Go to **Settings → Resources → Memory** and set to 6 GB+.
+
+### Step 1 — Clone
+
 ```bash
-cd infra
-docker-compose up -d
+git clone https://github.com/sanjaysaini383/observability-platform.git
+cd observability-platform
 ```
 
-**Wait for all services to be healthy (~2 minutes)**, then access:
-- **Dashboard:** http://localhost:3000
-- **Query API:** http://localhost:4000
-- **Trace collector:** http://localhost:4317 (gRPC)
+### Step 2 — Add your Groq API key
 
-### Generate live traffic
+Create the file `infra/.env` (already gitignored):
+
 ```bash
-cd infra
-chmod +x load-gen.sh
-./load-gen.sh
+# Get your FREE key at: https://console.groq.com → API Keys → Create key
+echo "GROQ_API_KEY=gsk_your_key_here" > infra/.env
 ```
 
-This continuously sends requests to the API Gateway, generating distributed traces across all services.
+> Groq is completely free, needs zero local disk space, and gives fast llama3 inference in the cloud.
+
+### Step 3 — Start the entire stack
+
+```bash
+cd infra
+docker compose up --build
+```
+
+First run pulls Docker images (~2 GB). Subsequent starts take under 60 seconds.
+
+### Step 4 — Generate live traffic
+
+Open a **new terminal** (use Git Bash or WSL on Windows):
+
+```bash
+bash infra/load-gen.sh
+```
+
+### Step 5 — Open the dashboard
+
+| URL | What it is |
+|-----|-----------|
+| **http://localhost:8080** | 🖥️ React Dashboard |
+| http://localhost:4000 | 🔌 Query REST API |
+| http://localhost:3000 | 🚪 API Gateway |
+| http://localhost:8123 | 🗄️ ClickHouse HTTP |
+
+After ~60s of traffic: traces appear. After ~2 min: AI insights appear in the sidebar.
 
 ---
 
 ## 🏗️ Architecture
 
-### System Overview
-
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                     TIER 1: INSTRUMENTED SERVICES                      │
-├──────────────────┬──────────────────┬──────────────────────────────────┤
-│   Node.js API    │  Python FastAPI  │      Node.js Payment             │
-│   Gateway        │  Order Service   │      Service                     │
-│  (OTel SDK)      │   (OTel SDK)     │     (OTel SDK)                   │
-└────────┬─────────┴────────┬─────────┴──────────┬──────────────────────┘
-         │                  │                    │
-         └──────────────────┴────────────────────┘
-                      │
-         ╔════════════▼════════════╗
-         ║  TIER 2: OTel Collector  ║
-         ║  (Routes to Kafka)       ║
-         ╚════════════╤════════════╝
-                      │
-         ┌────────────┼────────────┐
-         │            │            │
-         ▼            ▼            ▼
-    Traces Topic  Metrics Topic  Logs Topic
-         │            │            │
-         └────────────┼────────────┘
-                      │
-              ║═══════▼════════║
-              ║  TIER 3: Kafka  ║
-              ║  (Message Bus)  ║
-              ║═══════╤════════║
-                      │
-         ┌────────────┴────────────┐
-         │                         │
-         ▼                         ▼
-    ┌─────────────┐          ┌──────────────┐
-    │ Kafka       │          │  Query API   │
-    │ Consumer    │          │  (REST)      │
-    │ (writes to  │          │  (w/ Redis   │
-    │ ClickHouse) │          │   cache)     │
-    └──────┬──────┘          └──────┬───────┘
-           │                        │
-           ▼                        ▼
-    ┌────────────────┐      ╔══════════════════╗
-    │  TIER 4: Data  │      ║ TIER 5: Dashboard║
-    │  Storage       │      ║ (React + Charts) ║
-    │  ClickHouse    │◄─────╫══════════════════╝
-    │  (OLAP DB)     │      ║
-    └────────┬───────┘      ║ LLM Analyser
-             │               ║ (Ollama llama3)
-             │               ║
-             └───────────────╫──►┌──────────────┐
-                             ║   │trace_insights│
-                             ║   │(root causes) │
-                             ║   └──────────────┘
-                             ╚══════════════════╝
+┌─────────────────────────────────────────────────────────────────────┐
+│                     INSTRUMENTED MICROSERVICES                      │
+│   api-gateway (Node.js)  │  order-service (Python)  │  payment (Node.js) │
+│   OTel SDK auto-instruments HTTP calls, emits spans via gRPC       │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ OTLP/gRPC
+                               ▼
+                    ┌──────────────────────┐
+                    │  OTel Collector       │  ← batches + memory limits
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+        otel.traces      otel.metrics       otel.logs
+              └────────────────┼────────────────┘
+                               ▼
+                    ┌──────────────────────┐
+                    │   Apache Kafka        │  ← backpressure buffer
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────▼───────────┐
+                    │   Kafka Consumer      │  ← protobuf → ClickHouse
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────▼───────────┐
+                    │   ClickHouse (OLAP)   │  ← columnar storage
+                    │   + Materialised View │     p50/p95/p99 per minute
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                                 ▼
+   ┌──────────────────────┐       ┌─────────────────────────┐
+   │  Trace Analyser       │       │  Query API (Express)     │
+   │  (background worker)  │       │  + Redis cache (30s TTL) │
+   │  polls error traces   │       └──────────┬──────────────┘
+   │  every 60 seconds     │                  │
+   └──────────┬────────────┘                  ▼
+              │ HTTP                ┌──────────────────────┐
+              ▼                    │  React Dashboard      │
+   ┌──────────────────────┐        │  • Trace Explorer     │
+   │  Groq Cloud API       │        │  • Service Graph      │
+   │  llama3-8b-8192       │        │  • Metrics + Alerts   │
+   │  (free tier)          │        │  • AI Insights Sidebar│
+   └──────────┬────────────┘        └──────────────────────┘
+              │ saves insight
+              ▼
+   trace_insights table (ClickHouse)
 ```
 
-### Data Flow Pipeline
+### Data Flow Summary
 
 ```
-                    Distributed Traces Flow
-
-1. INSTRUMENTATION
-   ┌─────────────────────┐
-   │  Services emit      │
-   │  OpenTelemetry      │
-   │  spans/metrics      │
-   │  (gRPC OTLP)        │
-   └────────────┬────────┘
-                │
-2. COLLECTION
-   ┌────────────▼────────────┐
-   │  OTel Collector         │
-   │  • Batch processor      │
-   │  • Memory limiter       │
-   │  • Resource enrichment  │
-   └────────────┬────────────┘
-                │
-3. STREAMING
-   ┌────────────▼────────────┐
-   │  Apache Kafka (3 topics)│
-   │  • otel.traces          │
-   │  • otel.metrics         │
-   │  • otel.logs            │
-   └────────────┬────────────┘
-                │
-4. INGESTION
-   ┌────────────▼────────────┐
-   │  Kafka Consumer         │
-   │  • Deserialize OTLP     │
-   │  • Flatten spans        │
-   │  • Batch writes         │
-   └────────────┬────────────┘
-                │
-5. STORAGE
-   ┌────────────▼────────────────────┐
-   │  ClickHouse (Columnar OLAP)      │
-   │  • traces (OrderKey: Service,    │
-   │            StartTime)            │
-   │  • metrics                       │
-   │  • logs                          │
-   │  • trace_insights (LLM output)   │
-   │  • service_latency_mv            │
-   │    (materialised view: p99 agg)  │
-   └────────────┬────────────────────┘
-                │
-6. QUERYING
-   ┌────────────▼────────────────────┐
-   │  Query API (Express + Redis)     │
-   │  • /api/traces                   │
-   │  • /api/traces/{id}              │
-   │  • /api/services (graph)         │
-   │  • /api/metrics                  │
-   │  • /api/alerts (anomalies)       │
-   │  • /api/insights/{id} (LLM)      │
-   │  (30s cache for service map)     │
-   └────────────┬────────────────────┘
-                │
-7. LLM ANALYSIS (Parallel)
-   ┌────────────▼────────────────────┐
-   │  Trace Analyser Worker           │
-   │  • Poll for error traces         │
-   │  • Call Ollama llama3            │
-   │  • Extract root cause            │
-   │  • Store in trace_insights       │
-   └────────────┬────────────────────┘
-                │
-8. VISUALIZATION
-   ┌────────────▼────────────────────┐
-   │  React Dashboard                 │
-   │  • Trace Explorer (table)        │
-   │  • Service Graph (react-flow)    │
-   │  • Metrics (Recharts)            │
-   │  • AI Insights (card panel)      │
-   └────────────────────────────────┘
+Load Generator
+  → API Gateway (port 3000)
+    → order-service (port 5000) + payment-service (port 3001)
+      → OTel spans → Collector (port 4317)
+        → Kafka (3 topics)
+          → Kafka Consumer → ClickHouse
+            → Query API (port 4000) → Redis cache
+              → React Dashboard (port 8080)
+            → Trace Analyser → Groq API → trace_insights → Dashboard AI Sidebar
 ```
 
 ---
@@ -174,416 +137,288 @@ This continuously sends requests to the API Gateway, generating distributed trac
 
 ```
 observability-platform/
-├── services/                          # Instrumented demo microservices
-│   ├── api-gateway/                   # Node.js: public facing API
-│   │   ├── tracing.js                 # OTel SDK initialization
-│   │   ├── app.js                     # Express server
-│   │   ├── package.json
-│   │   ├── Dockerfile
-│   │   └── .env.example
-│   │
-│   ├── order-service/                 # Python FastAPI: order business logic
-│   │   ├── tracing.py                 # OTel instrumentation
-│   │   ├── main.py                    # FastAPI app
-│   │   ├── requirements.txt
-│   │   ├── Dockerfile
-│   │   └── .env.example
-│   │
-│   └── payment-service/               # Node.js: payment processing
+├── services/
+│   ├── api-gateway/          # Node.js + Express — public API, calls other services
+│   │   ├── tracing.js        # OTel SDK (loaded via --import flag)
+│   │   └── app.js            # Routes: GET /order/:id, GET /pay/:orderId
+│   ├── order-service/        # Python FastAPI — returns fake orders, 5% error rate
+│   │   ├── tracing.py        # OTel SDK for Python
+│   │   └── main.py           # FastAPI app
+│   └── payment-service/      # Node.js + Express — payment sim, 8% timeout rate
 │       ├── tracing.js
-│       ├── app.js
-│       ├── package.json
-│       ├── Dockerfile
-│       └── .env.example
+│       └── app.js
 │
 ├── collector/
-│   └── otelcol-config.yaml            # OTel Collector YAML (Kafka exporters)
+│   └── otelcol-config.yaml   # OTel Collector: OTLP → Kafka (traces/metrics/logs)
 │
-├── kafka-consumer/                    # Node.js: reads Kafka → writes ClickHouse
-│   ├── index.js
-│   ├── package.json
-│   ├── Dockerfile
-│   └── .env.example
+├── kafka-consumer/
+│   └── index.js              # Reads Kafka topics → bulk-inserts into ClickHouse
 │
-├── query-api/                         # Express REST API + cache
-│   ├── index.js                       # Main API endpoints
-│   ├── package.json
-│   ├── Dockerfile
-│   ├── .env.example
+├── query-api/
+│   ├── index.js              # REST API: /api/traces, /api/services, /api/metrics,
+│   │                         #           /api/alerts, /api/insights, /api/insights/:id
 │   └── workers/
-│       ├── trace-analyser.js          # Background LLM worker
-│       ├── Dockerfile
-│       └── .env.example
+│       └── trace-analyser.js # Background worker: error traces → Groq → trace_insights
 │
-├── dashboard/                         # React frontend
-│   ├── src/
-│   │   ├── App.js
-│   │   ├── index.js
-│   │   ├── index.css
-│   │   ├── components/
-│   │   │   └── Navbar.js
-│   │   └── pages/
-│   │       ├── TraceExplorer.js       # Trace list + filter
-│   │       ├── ServiceGraph.js        # react-flow dependency graph
-│   │       └── MetricsView.js         # Recharts latency/error rate
-│   ├── public/
-│   │   └── index.html
-│   ├── package.json
-│   ├── Dockerfile
-│   └── .env.example
+├── dashboard/
+│   └── src/
+│       ├── App.js            # Router + layout (Navbar + AI sidebar)
+│       ├── pages/
+│       │   ├── TraceExplorer.js   # Trace list + waterfall detail panel
+│       │   ├── ServiceGraph.js    # react-flow dependency graph (dagre layout)
+│       │   └── MetricsView.js     # Recharts latency/error-rate + alerts
+│       └── components/
+│           ├── Navbar.js
+│           └── AIInsightsSidebar.js  # Right panel, polls /api/insights every 15s
 │
-├── infra/
-│   ├── docker-compose.yml             # 🔥 Full stack in one file
-│   ├── load-gen.sh                    # Traffic generator script
-│   └── clickhouse/
-│       └── init.sql                   # ClickHouse DDL + views
-│
-├── README.md                          # This file
-└── observability-platform-roadmap.md  # Detailed phase breakdown
+└── infra/
+    ├── docker-compose.yml    # Full stack — 10 services
+    ├── .env                  # YOUR GROQ_API_KEY goes here (gitignored)
+    ├── .env.example          # Template — safe to commit
+    ├── load-gen.sh           # Continuous traffic generator
+    └── clickhouse/
+        └── init.sql          # Schema DDL + materialised views + helper views
 ```
 
 ---
 
-## 🔧 Tech Stack & Versions
+## 🔧 Tech Stack
 
-| Component | Technology | Version | Why |
-|---|---|---|---|
-| **Instrumentation** | OpenTelemetry SDK | 0.50+ | Industry standard, vendor-neutral |
-| **Services (Node.js)** | Express + Node.js | 18+ | Fast, easy async/HTTP calls |
-| **Services (Python)** | FastAPI | 0.104+ | Modern async Python, built-in OpenAPI |
-| **Collection** | OTel Collector Contrib | 0.92+ | Routes OTLP to Kafka without processing overhead |
-| **Message Broker** | Apache Kafka | 7.5+ | Decouples ingest from storage, backpressure |
-| **Storage** | ClickHouse | Latest | Columnar OLAP, 10-100× faster than Postgres for traces |
-| **Cache** | Redis | 7+ | Sub-millisecond lookups for service map |
-| **Query API** | Express.js | 4.18+ | Lightweight, proven |
-| **LLM / AI** | Ollama + llama3 | Latest | Free, runs on CPU, no API keys |
-| **Frontend** | React + Tailwind | 18+ | Modern, component-driven, dark mode ready |
-| **Charts** | Recharts | 2.10+ | Composable React charts |
-| **Graph** | react-flow | 11.10+ | Interactive node-edge diagrams |
-| **Containerisation** | Docker + Docker Compose | Latest | One-command full stack |
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| **Instrumentation** | OpenTelemetry SDK (Node.js + Python) | Industry standard, vendor-neutral, auto-instruments HTTP |
+| **Collection** | OTel Collector Contrib 0.92 | Batch + memory-limit + Kafka export |
+| **Message Broker** | Apache Kafka (Confluent 7.5) | Decouples ingest from storage, survives ClickHouse downtime |
+| **Storage** | ClickHouse 24.3 | Columnar OLAP — 10-100× faster than Postgres for trace queries |
+| **Cache** | Redis 7 | Sub-millisecond service map lookups |
+| **Query API** | Node.js + Express | REST over ClickHouse + Redis |
+| **AI / LLM** | Groq cloud API (llama3-8b-8192) | Free tier, zero disk space, ~2s inference |
+| **Frontend** | React 18 + Tailwind CSS | Dark-mode UI |
+| **Charts** | Recharts 2.10 | Composable React charts |
+| **Graph** | react-flow 11 + dagre | Auto-layout service dependency graph |
+| **Containerisation** | Docker + Docker Compose | One-command full stack |
 
 ---
 
 ## 📊 Benchmark Targets
 
-After running `load-gen.sh` for 5+ minutes, you should see:
+After running `load-gen.sh` for 5+ minutes:
 
-| Metric | Target | Achieved |
-|---|---|---|
-| Spans ingested/sec | > 500 spans/sec | ✅ |
-| Trace query latency (by traceId) | < 50ms | ✅ |
-| Service map query (cached) | < 5ms | ✅ |
-| Service map query (uncached) | < 500ms | ✅ |
-| LLM analysis time per trace | 5–30s (Ollama CPU) | ✅ |
-| ClickHouse row count after 24h | > 500,000 spans | ✅ |
-| Dashboard refresh latency | < 1s (React Query) | ✅ |
-
----
-
-## 🚀 Phase-by-Phase Breakdown
-
-### Phase 1: Demo Microservices (Days 1–3) ✅
-- **3 services** with realistic traffic patterns
-- **OpenTelemetry SDKs** auto-instrument HTTP calls
-- **Trace context propagation** via `traceparent` headers
-- **Error simulation** (10%, 5%, 8% rates per service)
-
-**Files:**
-- `services/api-gateway/app.js` — HTTP calls to order + payment
-- `services/order-service/main.py` — FastAPI with DB delay simulation
-- `services/payment-service/app.js` — Payment processing with timeouts
+| Metric | Target |
+|--------|--------|
+| Spans ingested/sec | > 500 |
+| Trace query by traceId | < 50ms |
+| Service map query (cached) | < 5ms |
+| Service map query (uncached) | < 500ms |
+| AI root cause analysis (Groq) | ~2s per trace |
+| ClickHouse rows after 24h | > 500,000 |
+| Dashboard refresh latency | < 1s |
 
 ---
 
-### Phase 2: OTel Collector + Kafka (Days 3–5) ✅
-- **Collector routes** traces/metrics/logs to 3 Kafka topics
-- **Kafka consumer** deserialises OTLP and bulk-inserts to ClickHouse
-- **At-least-once delivery** — Kafka offset committed only after DB write
+## 📚 API Reference
 
-**Files:**
-- `collector/otelcol-config.yaml` — Batch + memory limiter + exporters
-- `kafka-consumer/index.js` — Protobuf decode + ClickHouse INSERT
+### Traces
 
----
+```bash
+# List recent traces (filter by service, status, time)
+curl "http://localhost:4000/api/traces?service=api-gateway&status=error&limit=50"
 
-### Phase 3: ClickHouse Schema (Days 5–7) ✅
-- **Tables:** traces, metrics, logs (MergeTree + TTL)
-- **Materialised view:** `service_latency_mv` (pre-computed p50/p95/p99)
-- **View:** `service_dependencies` (joins spans for service graph)
-- **Table:** `trace_insights` (LLM-generated root causes)
+# Full span list for a trace
+curl "http://localhost:4000/api/traces/abc123def456"
+```
 
-**File:**
-- `infra/clickhouse/init.sql` — DDL + views + indexes
+### Metrics
 
----
+```bash
+# Latency percentiles + error rate (window: 1h, 6h, 24h)
+curl "http://localhost:4000/api/metrics?service=payment-service&window=1h"
 
-### Phase 4: Query API (Days 7–12) ✅
-- **REST endpoints** for traces, metrics, service map
-- **Redis caching** (30s TTL for service map)
-- **Error traces** filtered for high error rate
-- **Insights API** returns LLM analysis per trace
+# Active anomaly alerts
+curl "http://localhost:4000/api/alerts"
+```
 
-**File:**
-- `query-api/index.js` — 6 endpoints + cache logic
+### Service Graph
 
----
+```bash
+# Nodes + edges for service dependency graph (Redis cached 30s)
+curl "http://localhost:4000/api/services"
+```
 
-### Phase 5: LLM Anomaly Detection (Days 12–16) ✅
-- **Background worker** polls ClickHouse every 60s
-- **Calls Ollama locally** (no API keys, runs on CPU)
-- **Extracts root cause** from trace spans
-- **Stores in `trace_insights`** for dashboard
+### AI Insights
 
-**File:**
-- `query-api/workers/trace-analyser.js` — LLM + storage
+```bash
+# 10 most recent LLM root cause analyses (for sidebar)
+curl "http://localhost:4000/api/insights"
+
+# Root cause for a specific trace
+curl "http://localhost:4000/api/insights/abc123def456"
+```
 
 ---
 
-### Phase 6: React Dashboard (Days 16–24) ✅
-- **View 1: Trace Explorer** — list traces, filter by service/status
-- **View 2: Service Graph** — react-flow node-edge diagram
-- **View 3: Metrics** — Recharts p50/p95/p99 + error rate
-- **AI Insights Panel** — shows LLM root causes
+## 🛠️ Local Development (without full Docker stack)
 
-**Files:**
-- `dashboard/src/pages/TraceExplorer.js`
-- `dashboard/src/pages/ServiceGraph.js`
-- `dashboard/src/pages/MetricsView.js`
+Start only the infrastructure via Docker:
+
+```bash
+cd infra
+docker compose up zookeeper kafka clickhouse redis otel-collector -d
+```
+
+Then run each service locally:
+
+```bash
+# api-gateway
+cd services/api-gateway && npm install
+$env:SERVICE_NAME="api-gateway"; $env:OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+$env:ORDER_SERVICE_URL="http://localhost:5000"; $env:PAYMENT_SERVICE_URL="http://localhost:3001"
+npm start   # → http://localhost:3000
+
+# order-service
+cd services/order-service && pip install -r requirements.txt
+$env:SERVICE_NAME="order-service"; $env:OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+python main.py   # → http://localhost:5000
+
+# payment-service
+cd services/payment-service && npm install
+$env:SERVICE_NAME="payment-service"; $env:OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+npm start   # → http://localhost:3001
+
+# kafka-consumer
+cd kafka-consumer && npm install
+$env:KAFKA_BROKERS="localhost:9092"; $env:CLICKHOUSE_URL="http://localhost:8123"
+npm start
+
+# query-api
+cd query-api && npm install
+$env:CLICKHOUSE_URL="http://localhost:8123"; $env:REDIS_URL="redis://localhost:6379"
+npm start   # → http://localhost:4000
+
+# trace-analyser (set your Groq key first)
+cd query-api/workers
+$env:LLM_PROVIDER="groq"; $env:GROQ_API_KEY="gsk_xxx"; $env:CLICKHOUSE_URL="http://localhost:8123"
+node trace-analyser.js
+
+# dashboard (hot reload)
+cd dashboard && npm install
+$env:REACT_APP_API_URL="http://localhost:4000"
+npm run dev   # → http://localhost:3000
+```
 
 ---
 
-### Phase 7: Docker Compose + Deployment (Days 24–28) ✅
-- **Single `docker-compose up`** — entire stack in < 2 minutes
-- **Load generator** (`load-gen.sh`) — continuous traffic
-- **EC2 deployment** — t2.micro free tier eligible
+## 🤖 LLM Provider Options
 
-**Files:**
-- `infra/docker-compose.yml` — 11 services
-- `infra/load-gen.sh` — traffic generation
+The trace analyser supports three providers — switch via `LLM_PROVIDER` in `infra/.env`:
+
+| Provider | Disk | Internet | Setup |
+|----------|------|----------|-------|
+| `groq` *(default)* | 0 MB | ✅ | Add `GROQ_API_KEY` to `infra/.env` |
+| `ollama` (local tiny) | ~600 MB | ❌ | Change `MODEL: tinyllama` in compose |
+| `mock` (no LLM) | 0 MB | ❌ | Set `LLM_PROVIDER=mock` — fake analysis, great for dev |
+
+**Groq `.env` config:**
+```env
+GROQ_API_KEY=gsk_xxxxxxxxxxxx
+```
+
+**Mock `.env` config (no key needed):**
+```env
+GROQ_API_KEY=unused
+```
+And in `docker-compose.yml` set `LLM_PROVIDER: mock`.
+
+---
+
+## 📝 Troubleshooting
+
+### Dashboard shows no data
+1. Make sure `load-gen.sh` is running
+2. Wait 60s for data to flow through Kafka → ClickHouse
+3. Check kafka-consumer: `docker compose logs kafka-consumer -f`
+
+### AI Insights sidebar is empty
+- Groq analyser runs every 60s — wait 2 minutes
+- Verify API key: `docker compose logs trace-analyser -f`
+- Test: `curl http://localhost:4000/api/insights`
+
+### ClickHouse tables don't exist
+```bash
+docker compose down -v   # wipes volumes
+docker compose up --build
+```
+
+### Port already in use
+Change the **left** side of the port mapping in `docker-compose.yml`:
+```yaml
+ports:
+  - "8081:3000"  # change 8080 → 8081, keep :3000
+```
+
+### Kafka consumer not connecting
+```bash
+docker compose restart kafka-consumer
+```
+Kafka takes 30–60s to fully initialise on first boot.
+
+### Viewing logs
+```bash
+docker compose logs -f trace-analyser    # AI worker
+docker compose logs -f kafka-consumer    # ingestion pipeline
+docker compose logs -f query-api         # REST API
+docker compose logs -f otel-collector    # span collection
+```
 
 ---
 
 ## 💡 Interview Talking Points
 
-### **Column Storage Internals**
-> ClickHouse is a columnar OLAP database. Unlike Postgres (row-oriented), it stores data by column, enabling:
-> - **10–100× faster** range scans (query by `(ServiceName, StartTime)`)
-> - **Materialised views** pre-compute p99 percentiles at insert time → queries return instant results
-> - **Compression** — repetitive column values compress extremely well
+### Why Kafka between Collector and ClickHouse?
+> **Backpressure.** If ClickHouse is slow or down, Kafka retains data and the consumer catches up on restart. This decouples ingest rate from storage rate — a core resilience pattern.
 
-### **Distributed Tracing Theory**
-> A trace is a DAG (directed acyclic graph) of spans. Each span:
-> - Has a `traceId` (shared across all services)
-> - Has a `spanId` (unique per span)
-> - References a `parentSpanId` (parent-child relationships)
-> 
-> **Trace context propagation** via `traceparent` header ensures the `traceId` flows across service boundaries. This is why you can see the full call path in one trace.
+### Why ClickHouse over PostgreSQL for traces?
+> **Columnar storage.** The `ORDER BY (ServiceName, StartTime)` key makes time-range scans over millions of rows 10–100× faster than row-oriented databases. `MergeTree` compresses repetitive values aggressively.
 
-### **Backpressure & Resilience**
-> Kafka acts as a **buffer**:
-> - Services emit spans → OTel Collector → Kafka (fast, asynchronous)
-> - Kafka Consumer → ClickHouse (can be slow without blocking producers)
-> - If ClickHouse is down, Kafka retains messages and consumer catches up on restart
-> 
-> This pattern is called **decoupling** and is core to microservices resilience.
+### What does the materialised view buy you?
+> **Pre-computed aggregations.** p99 percentiles are expensive at query time. `service_latency_mv` computes them at insert time — dashboard queries return instant results.
 
-### **Observability vs Monitoring**
-> - **Monitoring** = predefined dashboards (CPU, memory, request count)
-> - **Observability** = you can ask arbitrary questions about system behaviour
-> 
-> The 3 pillars of observability:
-> 1. **Traces** — full request paths (this platform)
-> 2. **Metrics** — aggregated time series (p99 latency, error rate)
-> 3. **Logs** — structured events (stored in `logs` table)
-> 
-> **Correlation** is key — traces link metrics to logs to traces to root causes.
+### Why OpenTelemetry and not custom logging?
+> **Vendor-neutral + auto-instrumentation.** Zero changes to business logic. Standard `traceparent` header propagation links spans across service boundaries automatically.
 
-### **AI in Production Infrastructure**
-> LLM-assisted root cause analysis is a real trend:
-> - Datadog AI Insights: "Why did my trace fail?" → LLM reads spans → suggests root cause
-> - New Relic: Similar feature in their APM
-> 
-> This platform uses **Ollama + llama3** (free, runs locally). In production:
-> - Lower latency (local inference vs. OpenAI API)
-> - No API costs
-> - No data leaves your network (privacy compliance)
-
----
-
-## 📈 Performance Tuning Notes
-
-### ClickHouse Optimisations
-- `ORDER BY (ServiceName, StartTime)` — query by service + time range is instant
-- `PARTITION BY toYYYYMMDD(StartTime)` — old partitions deleted per TTL
-- `TTL StartTime + INTERVAL 30 DAY` — traces auto-deleted after 30 days
-- **Materialised view** — p99 pre-computed, query returns aggregated results instantly
-
-### Query API Caching
-- Service map (most expensive) cached for **30s**
-- Individual traces cached for **5 minutes**
-- Redis SETEX on write, GET on read
-
-### Ollama Optimisation
-- Model: **llama3** (7B parameters, ~4GB)
-- Runs on CPU (GPU optional, not required)
-- Analyse 1 trace every 60 seconds (configurable)
-- Skips traces already in `trace_insights`
+### How does the AI layer add value?
+> **Reduces MTTR.** Instead of an engineer reading 200 spans to find the root cause, the Groq-hosted llama3 model does it in ~2 seconds. This is exactly what Datadog AI Insights and New Relic's AI feature do commercially.
 
 ---
 
 ## 🔐 Security Notes
 
 **Current (Development)**
-- All services on same Docker network (no encryption)
+- All services on the same Docker bridge network
 - No authentication on Query API
-- Redis has no password
+- Groq API key stored in local `.env` (gitignored)
 
 **Production Checklist**
+- [ ] Add API key / JWT authentication to Query API
 - [ ] Enable TLS between services
-- [ ] Add API key authentication to Query API
-- [ ] Add Redis authentication + persistence
-- [ ] Set ClickHouse user/password
-- [ ] Use Kubernetes secrets for credentials
-- [ ] Enable audit logging
-- [ ] Implement rate limiting on API endpoints
+- [ ] Add Redis password
+- [ ] Set ClickHouse username/password
+- [ ] Store Groq key in a secrets manager (AWS Secrets Manager, Vault)
+- [ ] Enable rate limiting on API endpoints
 
 ---
 
-## 📝 Common Issues & Troubleshooting
+## 🎓 Portfolio Impact
 
-### Services not connecting to OTel Collector
-**Symptom:** Traces not appearing in ClickHouse  
-**Solution:** Check `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable matches `http://otel-collector:4317`
+This project demonstrates:
+- ✅ **Full-stack distributed systems** — frontend → pipeline → OLAP storage
+- ✅ **Production architecture** — Kafka buffering, columnar storage, LLM integration
+- ✅ **OpenTelemetry best practices** — auto-instrumentation, context propagation
+- ✅ **Real-time streaming** — Kafka + ClickHouse materialised views
+- ✅ **AI in production infrastructure** — LLM root cause analysis
+- ✅ **DevOps** — Docker, health checks, graceful shutdown, retry logic
 
-### Kafka topics not created
-**Symptom:** Consumer hangs  
-**Solution:** OTel Collector auto-creates topics when it exports; wait ~30 seconds
-
-### ClickHouse running out of memory
-**Symptom:** Container OOMKilled  
-**Solution:** Reduce `BATCH_SIZE` in kafka-consumer or increase Docker memory limit
-
-### Ollama model not pulling
-**Symptom:** LLM analyser timeouts  
-**Solution:** Run `docker exec observability-platform_ollama_1 ollama pull llama3` manually
-
-### Dashboard blank
-**Symptom:** React page loads but no data  
-**Solution:** Check CORS on Query API; ensure `query-api` service is running
-
----
-
-## 🛠️ Development Workflow
-
-### Local Development (without Docker)
-
-**Terminal 1: Start ClickHouse + Kafka + Redis (Docker only)**
-```bash
-docker-compose up -d clickhouse kafka zookeeper redis
-```
-
-**Terminal 2: Start OTel Collector**
-```bash
-otelcol-contrib --config=collector/otelcol-config.yaml
-```
-
-**Terminal 3: Start API Gateway (Node.js)**
-```bash
-cd services/api-gateway
-npm install
-npm run dev
-```
-
-**Terminal 4: Start Order Service (Python)**
-```bash
-cd services/order-service
-pip install -r requirements.txt
-python main.py
-```
-
-**Terminal 5: Start Payment Service (Node.js)**
-```bash
-cd services/payment-service
-npm install
-npm run dev
-```
-
-**Terminal 6: Start Kafka Consumer**
-```bash
-cd kafka-consumer
-npm install
-npm start
-```
-
-**Terminal 7: Start Query API**
-```bash
-cd query-api
-npm install
-npm start
-```
-
-**Terminal 8: Start LLM Worker**
-```bash
-cd query-api/workers
-npm install
-node trace-analyser.js
-```
-
-**Terminal 9: Start Dashboard**
-```bash
-cd dashboard
-npm install
-npm start
-```
-
-Then run the load generator to generate traffic:
-```bash
-cd infra
-./load-gen.sh
-```
-
----
-
-## 📚 API Reference
-
-### Traces Endpoints
-
-**GET /api/traces** — List recent traces
-```bash
-curl "http://localhost:4000/api/traces?service=api-gateway&status=error&limit=50"
-```
-
-**GET /api/traces/{traceId}** — Fetch trace tree
-```bash
-curl "http://localhost:4000/api/traces/abc123def456"
-```
-
-### Metrics Endpoints
-
-**GET /api/metrics** — Latency + error rate
-```bash
-curl "http://localhost:4000/api/metrics?service=payment-service&window=1h"
-```
-
-**GET /api/alerts** — Active anomalies
-```bash
-curl "http://localhost:4000/api/alerts"
-```
-
-### Service Map
-
-**GET /api/services** — Service dependency graph
-```bash
-curl "http://localhost:4000/api/services"
-```
-Returns nodes and edges for react-flow.
-
-### AI Insights
-
-**GET /api/insights/{traceId}** — LLM root cause
-```bash
-curl "http://localhost:4000/api/insights/abc123def456"
-```
+> This is the architecture **Datadog, New Relic, and Honeycomb** use. You've built a working version from scratch. 🎉
 
 ---
 
@@ -592,44 +427,17 @@ curl "http://localhost:4000/api/insights/abc123def456"
 - [OpenTelemetry Docs](https://opentelemetry.io/docs/)
 - [ClickHouse Documentation](https://clickhouse.com/docs/)
 - [Kafka Documentation](https://kafka.apache.org/documentation/)
-- [Ollama Guide](https://github.com/ollama/ollama)
+- [Groq API Docs](https://console.groq.com/docs)
 - [React Flow](https://reactflow.dev/)
 
 ---
 
 ## 📄 License
 
-MIT — feel free to use this for learning, portfolios, or production.
+MIT — use freely for learning, portfolios, or production.
 
 ---
 
-## 🎓 Portfolio Impact
+**Happy tracing! 🕵️**
 
-This project demonstrates:
-- ✅ **Full-stack distributed systems** (frontend to data pipeline)
-- ✅ **Production architecture** (Kafka buffering, OLAP storage, LLM integration)
-- ✅ **Microservices instrumentation** (OpenTelemetry best practices)
-- ✅ **Real-time streaming** (Kafka + ClickHouse)
-- ✅ **AI in production** (local LLM, no paid APIs)
-- ✅ **DevOps** (Docker, Docker Compose, health checks)
-- ✅ **Full CI/CD ready** (containerised, tested, benchmarked)
-
-This is the kind of system **Datadog, New Relic, and Honeycomb** build. You've built a working version from scratch. 🎉
-
----
-
-## 🆘 Support
-
-For issues:
-1. Check the service logs: `docker-compose logs -f <service_name>`
-2. Verify health checks: `docker-compose ps`
-3. Test connectivity: `curl -s http://localhost:4317/ping`
-
----
-
-**Happy tracing! 🕵️** 
-
-Built with ❤️ using OpenTelemetry, Kafka, ClickHouse, Ollama, and React.
-#   o b s e r v a b i l i t y - p l a t f o r m 
- 
- 
+Built with ❤️ using OpenTelemetry · Kafka · ClickHouse · Groq · React
