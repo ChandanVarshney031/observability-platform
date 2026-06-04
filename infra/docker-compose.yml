@@ -1,5 +1,9 @@
 version: '3.8'
 
+# ── Groq API key is loaded from infra/.env ───────────────────────────────────
+# Create infra/.env with:  GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxx
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.3
@@ -45,7 +49,6 @@ services:
     environment:
       CLICKHOUSE_DB: default
     volumes:
-      # Path is relative to this docker-compose.yml file (which is inside infra/)
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
       - clickhouse_data:/var/lib/clickhouse
     networks:
@@ -86,9 +89,9 @@ services:
 
   api-gateway:
     build:
-      context: ./services/api-gateway
+      context: ../services/api-gateway
     ports:
-      - "3000:3000"   # API Gateway on port 3000
+      - "3000:3000"
     depends_on:
       otel-collector:
         condition: service_started
@@ -108,7 +111,7 @@ services:
 
   order-service:
     build:
-      context: ./services/order-service
+      context: ../services/order-service
     ports:
       - "5000:5000"
     depends_on:
@@ -128,7 +131,7 @@ services:
 
   payment-service:
     build:
-      context: ./services/payment-service
+      context: ../services/payment-service
     ports:
       - "3001:3001"
     depends_on:
@@ -148,7 +151,7 @@ services:
 
   kafka-consumer:
     build:
-      context: ./kafka-consumer
+      context: ../kafka-consumer
     depends_on:
       kafka:
         condition: service_healthy
@@ -164,7 +167,7 @@ services:
 
   query-api:
     build:
-      context: ./query-api
+      context: ../query-api
     ports:
       - "4000:4000"
     depends_on:
@@ -187,51 +190,23 @@ services:
 
   trace-analyser:
     build:
-      context: ./query-api/workers
+      context: ../query-api/workers
       dockerfile: Dockerfile
     depends_on:
       clickhouse:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
     environment:
       CLICKHOUSE_URL: http://clickhouse:8123
-      OLLAMA_URL: http://ollama:11434
-      MODEL: tinyllama
+      LLM_PROVIDER: groq
+      GROQ_API_KEY: ${GROQ_API_KEY}      # loaded from infra/.env
+      GROQ_MODEL: llama3-8b-8192          # free model on Groq
       ANALYSIS_INTERVAL: 60000
-      # --- LLM Provider switch ---
-      # Options: "ollama" (local), "groq" (free cloud), "mock" (no LLM)
-      LLM_PROVIDER: ollama
-      # Uncomment and set your free Groq key if using LLM_PROVIDER=groq
-      # Get key at: https://console.groq.com
-      # GROQ_API_KEY: your_groq_key_here
-      # GROQ_MODEL: llama3-8b-8192
     networks:
       - observability
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_HOST: "0.0.0.0:11434"
-    # Pre-pull llama3 on startup so trace-analyser works immediately
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["ollama serve & sleep 10 && ollama pull tinyllama && wait"]
-    networks:
-      - observability
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags | grep -q tinyllama"]
-      interval: 30s
-      timeout: 15s
-      retries: 10
-      start_period: 60s
 
   dashboard:
     build:
-      context: ./dashboard
+      context: ../dashboard
     ports:
       - "8080:3000"   # Dashboard on 8080 — api-gateway occupies 3000
     depends_on:
@@ -248,4 +223,3 @@ networks:
 
 volumes:
   clickhouse_data:
-  ollama_data:
