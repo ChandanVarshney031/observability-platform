@@ -197,8 +197,15 @@ services:
     environment:
       CLICKHOUSE_URL: http://clickhouse:8123
       OLLAMA_URL: http://ollama:11434
-      MODEL: llama3
+      MODEL: tinyllama
       ANALYSIS_INTERVAL: 60000
+      # --- LLM Provider switch ---
+      # Options: "ollama" (local), "groq" (free cloud), "mock" (no LLM)
+      LLM_PROVIDER: ollama
+      # Uncomment and set your free Groq key if using LLM_PROVIDER=groq
+      # Get key at: https://console.groq.com
+      # GROQ_API_KEY: your_groq_key_here
+      # GROQ_MODEL: llama3-8b-8192
     networks:
       - observability
 
@@ -212,11 +219,11 @@ services:
       OLLAMA_HOST: "0.0.0.0:11434"
     # Pre-pull llama3 on startup so trace-analyser works immediately
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ollama serve & sleep 10 && ollama pull llama3 && wait"]
+    command: ["ollama serve & sleep 10 && ollama pull tinyllama && wait"]
     networks:
       - observability
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags | grep -q llama3"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags | grep -q tinyllama"]
       interval: 30s
       timeout: 15s
       retries: 10

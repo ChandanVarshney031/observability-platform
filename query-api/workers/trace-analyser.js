@@ -4,185 +4,240 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const CLICKHOUSE_URL = process.env.CLICKHOUSE_URL || 'http://clickhouse:8123';
+const ANALYSIS_INTERVAL = parseInt(process.env.ANALYSIS_INTERVAL || '60000', 10);
+
+// ── LLM Provider configuration ──────────────────────────────────────────────
+// Set LLM_PROVIDER to "groq", "ollama", or "mock" in your environment.
+// "mock" is useful for development when you have no LLM available.
+const LLM_PROVIDER = process.env.LLM_PROVIDER || 'ollama';
+
+// Ollama config (local, free, needs ~600MB-4GB disk)
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://ollama:11434';
-const MODEL = process.env.MODEL || 'llama3';
-const ANALYSIS_INTERVAL = parseInt(process.env.ANALYSIS_INTERVAL || '60000', 10); // 60 seconds
+const OLLAMA_MODEL = process.env.MODEL || 'tinyllama';
 
-/**
- * Query ClickHouse for error traces not yet analysed
- */
-async function getUnanalysedErrorTraces() {
+// Groq config (cloud, free tier, zero local storage — needs API key)
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama3-8b-8192';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+
+console.log(`🧠 LLM Provider: ${LLM_PROVIDER.toUpperCase()}`);
+if (LLM_PROVIDER === 'ollama') console.log(`   Model: ${OLLAMA_MODEL} @ ${OLLAMA_URL}`);
+if (LLM_PROVIDER === 'groq')   console.log(`   Model: ${GROQ_MODEL} (Groq Cloud)`);
+if (LLM_PROVIDER === 'mock')   console.log(`   Using mock responses (no LLM)`);
+
+// ── ClickHouse helpers ───────────────────────────────────────────────────────
+
+async function queryClickHouse(sql) {
   try {
-    const sql = `
-      SELECT
-        t.TraceId,
-        t.ServiceName,
-        t.OperationName,
-        t.StartTime,
-        t.StatusMessage,
-        groupArray(
-          tuple(
-            t.SpanId,
-            t.ServiceName,
-            t.OperationName,
-            t.Duration / 1000000 as DurationMs,
-            if(t.StatusCode = 2, 'ERROR', 'OK') as Status,
-            t.StatusMessage
-          )
-        ) as spans
-      FROM traces t
-      WHERE t.StatusCode = 2
-        AND t.StartTime > now() - INTERVAL 5 MINUTE
-        AND t.TraceId NOT IN (SELECT TraceId FROM trace_insights)
-      GROUP BY t.TraceId, t.ServiceName, t.OperationName, t.StartTime, t.StatusMessage
-      ORDER BY t.StartTime DESC
-      LIMIT 10
-    `;
-
     const response = await axios.post(
       `${CLICKHOUSE_URL}?query=${encodeURIComponent(sql)}&format=JSON`,
       null,
       { timeout: 5000 }
     );
-
     return response.data.data || [];
   } catch (error) {
-    console.error('Error fetching unanalysed traces:', error.message);
+    console.error('Error querying ClickHouse:', error.message);
     return [];
   }
 }
 
-/**
- * Format trace data into a prompt for the LLM
- */
-function buildPrompt(trace) {
-  const spanList = trace.spans
-    .map(
-      (span, idx) =>
-        `${idx + 1}. [${span[2]}] ${span[3]} | Duration: ${span[4]}ms | Status: ${span[5]}${
-          span[6] ? ` | Error: ${span[6]}` : ''
-        }`
-    )
-    .join('\n');
-
-  return `You are a distributed systems expert specializing in microservices debugging. 
-Analyze this error trace and identify the root cause.
-
-Trace ID: ${trace.TraceId}
-Service: ${trace.ServiceName}
-Operation: ${trace.OperationName}
-Error Message: ${trace.StatusMessage || 'Unknown error'}
-
-Spans in order (oldest to newest):
-${spanList}
-
-Analyze the sequence of events and identify:
-1. What went wrong (root cause)
-2. Which service/span caused the failure
-3. How to prevent this in the future
-
-Respond in JSON format only, with no markdown:
-{
-  "root_cause": "Clear one-sentence description of the root cause",
-  "impacted_services": ["service1", "service2"],
-  "severity": "low|medium|high|critical",
-  "recommendation": "Actionable one-sentence fix"
-}`;
+async function getUnanalysedErrorTraces() {
+  const sql = `
+    SELECT
+      t.TraceId,
+      t.ServiceName,
+      t.OperationName,
+      t.StartTime,
+      t.StatusMessage,
+      groupArray(
+        tuple(
+          t.SpanId,
+          t.ServiceName,
+          t.OperationName,
+          t.Duration / 1000000,
+          if(t.StatusCode = 2, 'ERROR', 'OK'),
+          t.StatusMessage
+        )
+      ) as spans
+    FROM traces t
+    WHERE t.StatusCode = 2
+      AND t.StartTime > now() - INTERVAL 5 MINUTE
+      AND t.TraceId NOT IN (SELECT TraceId FROM trace_insights)
+    GROUP BY t.TraceId, t.ServiceName, t.OperationName, t.StartTime, t.StatusMessage
+    ORDER BY t.StartTime DESC
+    LIMIT 10
+  `;
+  return queryClickHouse(sql);
 }
 
-/**
- * Call Ollama LLM to analyze trace
- */
-async function analyzeTraceWithLLM(trace) {
-  try {
-    const prompt = buildPrompt(trace);
-
-    console.log(`🧠 Analyzing trace ${trace.TraceId} with ${MODEL}...`);
-
-    const response = await axios.post(
-      `${OLLAMA_URL}/api/generate`,
-      {
-        model: MODEL,
-        prompt,
-        stream: false,
-        temperature: 0.3,
-      },
-      { timeout: 60000 } // Give LLM up to 60 seconds
-    );
-
-    if (!response.data.response) {
-      throw new Error('No response from Ollama');
-    }
-
-    // Parse JSON from response
-    const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('Could not extract JSON from LLM response');
-    }
-
-    const analysis = JSON.parse(jsonMatch[0]);
-    console.log(`✓ Analysis complete for ${trace.TraceId}`);
-
-    return {
-      rootCause: analysis.root_cause || 'Unknown cause',
-      impactedServices: analysis.impacted_services || [],
-      severity: analysis.severity || 'medium',
-      recommendation: analysis.recommendation || 'Investigate service logs',
-    };
-  } catch (error) {
-    console.error(`✗ Error analyzing trace with LLM: ${error.message}`);
-    return null;
-  }
-}
-
-/**
- * Store analysis in ClickHouse
- */
 async function storeAnalysis(trace, analysis) {
-  try {
-    const sql = `
-      INSERT INTO trace_insights (
-        TraceId,
-        ServiceName,
-        OperationName,
-        AnalysedAt,
-        RootCause,
-        ImpactedSpans,
-        Recommendation,
-        Severity
-      ) VALUES (
-        '${trace.TraceId}',
-        '${trace.ServiceName}',
-        '${trace.OperationName}',
-        now(),
-        '${analysis.rootCause.replace(/'/g, "''")}',
-        ['${analysis.impactedServices.join("','")}'],
-        '${analysis.recommendation.replace(/'/g, "''")}',
-        '${analysis.severity}'
-      )
-    `;
+  const escSql = (v) => String(v ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+  const sql = `
+    INSERT INTO trace_insights (
+      TraceId, ServiceName, OperationName, AnalysedAt,
+      RootCause, ImpactedSpans, Recommendation, Severity
+    ) VALUES (
+      '${escSql(trace.TraceId)}',
+      '${escSql(trace.ServiceName)}',
+      '${escSql(trace.OperationName)}',
+      now(),
+      '${escSql(analysis.rootCause)}',
+      ['${(analysis.impactedServices || []).map(escSql).join("','")}'],
+      '${escSql(analysis.recommendation)}',
+      '${escSql(analysis.severity)}'
+    )
+  `;
+
+  try {
     await axios.post(
       `${CLICKHOUSE_URL}?query=${encodeURIComponent(sql)}`,
       null,
       { timeout: 5000 }
     );
-
     console.log(`✓ Stored analysis for trace ${trace.TraceId}`);
   } catch (error) {
     console.error('Error storing analysis:', error.message);
   }
 }
 
-/**
- * Main analysis loop
- */
+// ── Prompt builder ───────────────────────────────────────────────────────────
+
+function buildPrompt(trace) {
+  const spanList = trace.spans
+    .map((span, idx) =>
+      `${idx + 1}. [${span[2]}] ${span[3]} | Duration: ${span[4]}ms | Status: ${span[5]}${
+        span[6] ? ` | Error: ${span[6]}` : ''
+      }`
+    )
+    .join('\n');
+
+  return `You are a distributed systems expert. Analyze this error trace from a microservices system and identify the root cause.
+
+Trace ID: ${trace.TraceId}
+Service: ${trace.ServiceName}
+Operation: ${trace.OperationName}
+Error: ${trace.StatusMessage || 'Unknown error'}
+
+Spans (oldest to newest):
+${spanList}
+
+Respond in JSON only, no markdown, no explanation:
+{
+  "root_cause": "one sentence description of what went wrong",
+  "impacted_services": ["service1", "service2"],
+  "severity": "low|medium|high|critical",
+  "recommendation": "one sentence actionable fix"
+}`;
+}
+
+// ── LLM Providers ────────────────────────────────────────────────────────────
+
+async function callOllama(prompt) {
+  const response = await axios.post(
+    `${OLLAMA_URL}/api/generate`,
+    {
+      model: OLLAMA_MODEL,
+      prompt,
+      stream: false,
+      temperature: 0.3,
+    },
+    { timeout: 60000 }
+  );
+
+  if (!response.data.response) throw new Error('Empty Ollama response');
+
+  const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('Could not extract JSON from Ollama response');
+  return JSON.parse(jsonMatch[0]);
+}
+
+async function callGroq(prompt) {
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY environment variable is not set. Get a free key at console.groq.com');
+  }
+
+  const response = await axios.post(
+    GROQ_API_URL,
+    {
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a distributed systems expert. Always respond with valid JSON only, no markdown.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 512,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+
+  const content = response.data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Empty Groq response');
+
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('Could not extract JSON from Groq response');
+  return JSON.parse(jsonMatch[0]);
+}
+
+function callMock(trace) {
+  // Returns a deterministic fake analysis — useful for demos without any LLM
+  const severities = ['low', 'medium', 'high', 'critical'];
+  const severity = severities[Math.floor(Math.random() * severities.length)];
+  return {
+    root_cause: `Simulated error in ${trace.ServiceName}: ${trace.StatusMessage || 'service returned an error'}`,
+    impacted_services: [trace.ServiceName],
+    severity,
+    recommendation: 'Check service logs and retry the operation. This is a mock analysis.',
+  };
+}
+
+// ── Main analysis loop ───────────────────────────────────────────────────────
+
+async function analyzeTraceWithLLM(trace) {
+  try {
+    const prompt = buildPrompt(trace);
+    console.log(`🧠 Analyzing trace ${trace.TraceId.substring(0, 8)}...`);
+
+    let parsed;
+
+    if (LLM_PROVIDER === 'groq') {
+      parsed = await callGroq(prompt);
+    } else if (LLM_PROVIDER === 'mock') {
+      parsed = callMock(trace);
+    } else {
+      // Default: ollama
+      parsed = await callOllama(prompt);
+    }
+
+    console.log(`✓ Analysis complete — severity: ${parsed.severity}`);
+
+    return {
+      rootCause:        parsed.root_cause        || 'Unknown cause',
+      impactedServices: parsed.impacted_services || [trace.ServiceName],
+      severity:         parsed.severity          || 'medium',
+      recommendation:   parsed.recommendation    || 'Investigate service logs',
+    };
+  } catch (error) {
+    console.error(`✗ LLM error for trace ${trace.TraceId.substring(0, 8)}: ${error.message}`);
+    return null;
+  }
+}
+
 async function analyzeErrorTraces() {
   try {
     const traces = await getUnanalysedErrorTraces();
 
     if (traces.length === 0) {
-      console.log('No unanalysed error traces found');
+      console.log('ℹ No unanalysed error traces found');
       return;
     }
 
@@ -190,37 +245,34 @@ async function analyzeErrorTraces() {
 
     for (const trace of traces) {
       const analysis = await analyzeTraceWithLLM(trace);
-
       if (analysis) {
         await storeAnalysis(trace, analysis);
       }
-
-      // Throttle to avoid overwhelming Ollama
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Throttle — Groq has rate limits; Ollama needs breathing room
+      await new Promise((resolve) => setTimeout(resolve, LLM_PROVIDER === 'groq' ? 1000 : 2000));
     }
   } catch (error) {
     console.error('Error in analysis loop:', error.message);
   }
 }
 
-/**
- * Start the worker
- */
+// ── Start ────────────────────────────────────────────────────────────────────
+
 async function start() {
   console.log('🚀 Starting LLM trace analyser...');
   console.log(`📊 ClickHouse: ${CLICKHOUSE_URL}`);
-  console.log(`🧠 Ollama: ${OLLAMA_URL} (model: ${MODEL})`);
   console.log(`⏱️  Analysis interval: ${ANALYSIS_INTERVAL}ms`);
 
-  // Initial run
   await analyzeErrorTraces();
-
-  // Periodic runs
   setInterval(analyzeErrorTraces, ANALYSIS_INTERVAL);
 }
 
-// Graceful shutdown
 process.on('SIGINT', () => {
+  console.log('\n⏹️  Stopping analyser...');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
   console.log('\n⏹️  Stopping analyser...');
   process.exit(0);
 });
