@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS traces (
 ) ENGINE = MergeTree()
 ORDER BY (ServiceName, StartTime)
 PARTITION BY toYYYYMMDD(StartTime)
-TTL StartTime + INTERVAL 30 DAY
+TTL toDateTime(StartTime) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192;
 
 -- Metrics table: for metrics aggregation
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS metrics (
 ) ENGINE = MergeTree()
 ORDER BY (ServiceName, MetricName, Timestamp)
 PARTITION BY toYYYYMMDD(Timestamp)
-TTL Timestamp + INTERVAL 7 DAY
+TTL toDateTime(Timestamp) + INTERVAL 7 DAY
 SETTINGS index_granularity = 8192;
 
 -- Logs table: for structured logging
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS logs (
 ) ENGINE = MergeTree()
 ORDER BY (ServiceName, Timestamp)
 PARTITION BY toYYYYMMDD(Timestamp)
-TTL Timestamp + INTERVAL 14 DAY
+TTL toDateTime(Timestamp) + INTERVAL 14 DAY
 SETTINGS index_granularity = 8192;
 
 -- Materialised view: p50, p95, p99 latency per service per minute
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS trace_insights (
 ) ENGINE = MergeTree()
 ORDER BY (ServiceName, AnalysedAt)
 PARTITION BY toYYYYMMDD(AnalysedAt)
-TTL AnalysedAt + INTERVAL 30 DAY
+TTL toDateTime(AnalysedAt) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192;
 
 -- Service dependency view: joins spans to track call paths
