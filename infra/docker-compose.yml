@@ -10,13 +10,12 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "*"
     ports:
       - "2181:2181"
     networks:
       - observability
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok"]
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep Zookeeper"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -49,6 +48,8 @@ services:
       - "9000:9000"
     environment:
       CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
       - clickhouse_data:/var/lib/clickhouse
@@ -160,7 +161,7 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKERS: kafka:9092
-      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_URL: http://default:password@clickhouse:8123
       BATCH_SIZE: 100
       FLUSH_INTERVAL: 5000
     networks:
@@ -178,7 +179,7 @@ services:
         condition: service_healthy
     environment:
       PORT: 4000
-      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_URL: http://default:password@clickhouse:8123
       REDIS_URL: redis://redis:6379
       CACHE_TTL: 30
     networks:
@@ -197,7 +198,7 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
-      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_URL: http://default:password@clickhouse:8123
       LLM_PROVIDER: groq
       GROQ_API_KEY: ${GROQ_API_KEY}      # loaded from infra/.env
       GROQ_MODEL: llama3-8b-8192          # free model on Groq
