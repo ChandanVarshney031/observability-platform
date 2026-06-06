@@ -1,40 +1,44 @@
 import { useEffect, useState } from 'react';
-import axios from 'axios';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Activity, AlertTriangle, Clock, Server } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, Tooltip } from 'recharts';
+import { fetchMetrics, fetchInsights, fetchTraces, fetchServices } from '@/lib/api';
 
 export default function Dashboard() {
-  const [data, setData] = useState<any>({
+  const [data, setData] = useState({
     kpis: { totalRequests: 0, errorRate: 0, p99: 0, activeServices: 0 },
-    sparkline: [],
-    errors: [],
-    insights: []
+    sparkline: [] as { time: string; value: number }[],
+    errors: [] as Awaited<ReturnType<typeof fetchTraces>>,
+    insights: [] as Awaited<ReturnType<typeof fetchInsights>>,
   });
 
   const fetchData = async () => {
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-      const [metricsRes, insightsRes, tracesRes, servicesRes] = await Promise.all([
-        axios.get(`${API_URL}/api/metrics?service=api-gateway&window=1h`).catch(() => ({ data: { p99: 0, errorRate: 0, rpsData: [] } })),
-        axios.get(`${API_URL}/api/insights`).catch(() => ({ data: [] })),
-        axios.get(`${API_URL}/api/traces?status=error&limit=10`).catch(() => ({ data: [] })),
-        axios.get(`${API_URL}/api/services`).catch(() => ({ data: { nodes: [] } }))
+      const [metrics, insights, errors, services] = await Promise.all([
+        fetchMetrics('api-gateway', '1h').catch(() => []),
+        fetchInsights().catch(() => []),
+        fetchTraces({ status: 'error', limit: 10 }).catch(() => []),
+        fetchServices().catch(() => ({ nodes: [], edges: [] })),
       ]);
 
-      const metrics = metricsRes.data;
-      const rpsData = metrics.rpsData || [];
+      const sparkline = metrics.map((m) => ({
+        time: m.time,
+        value: Math.round(m.rps * 60),
+      }));
+
+      const totalRequests = metrics.reduce((acc, m) => acc + m.rps * 60, 0);
+      const latest = metrics[metrics.length - 1];
 
       setData({
         kpis: {
-          totalRequests: rpsData.reduce((acc: number, val: any) => acc + val.value, 0) || 0,
-          errorRate: metrics.errorRate || 0,
-          p99: metrics.p99 || 0,
-          activeServices: servicesRes.data.nodes?.length || 0,
+          totalRequests: Math.round(totalRequests),
+          errorRate: latest?.errors ?? 0,
+          p99: latest?.p99 ?? 0,
+          activeServices: services.nodes.length,
         },
-        sparkline: rpsData,
-        errors: tracesRes.data || [],
-        insights: insightsRes.data || []
+        sparkline,
+        errors,
+        insights,
       });
     } catch (error) {
       console.error('Failed to fetch dashboard data', error);
@@ -50,8 +54,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-      
-      {/* KPIs */}
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -97,16 +100,16 @@ export default function Dashboard() {
             <CardTitle>Requests per Minute (Live)</CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
-             {data.sparkline.length > 0 ? (
+            {data.sparkline.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data.sparkline}>
                   <Tooltip contentStyle={{ backgroundColor: '#1A1D27', border: '1px solid #2A2D3E' }} />
                   <Line type="monotone" dataKey="value" stroke="#3B82F6" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
-             ) : (
-               <div className="flex h-full items-center justify-center text-muted-foreground">Waiting for traffic...</div>
-             )}
+            ) : (
+              <div className="flex h-full items-center justify-center text-muted-foreground">Waiting for traffic...</div>
+            )}
           </CardContent>
         </Card>
 
@@ -116,7 +119,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {data.insights.length > 0 ? data.insights.slice(0,5).map((insight: any) => (
+              {data.insights.length > 0 ? data.insights.slice(0, 5).map((insight) => (
                 <div key={insight.traceId} className="flex flex-col gap-1 border-b border-border pb-3 last:border-0">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-sm text-primary">{insight.serviceName}</span>
@@ -133,25 +136,25 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-      
+
       <Card>
         <CardHeader>
           <CardTitle>Recent Errors Feed</CardTitle>
         </CardHeader>
         <CardContent>
-           <div className="space-y-4">
-              {data.errors.length > 0 ? data.errors.map((err: any) => (
-                <div key={err.traceId} className="flex flex-col md:flex-row md:items-center justify-between border-b border-border pb-3 last:border-0 gap-2">
-                  <div className="flex items-center gap-4">
-                    <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-1 rounded">{err.traceId.substring(0, 8)}</span>
-                    <span className="font-medium">{err.serviceName}</span>
-                  </div>
-                  <span className="text-sm text-destructive">{err.operationName}</span>
+          <div className="space-y-4">
+            {data.errors.length > 0 ? data.errors.map((err) => (
+              <div key={err.traceId} className="flex flex-col md:flex-row md:items-center justify-between border-b border-border pb-3 last:border-0 gap-2">
+                <div className="flex items-center gap-4">
+                  <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-1 rounded">{err.traceId.substring(0, 8)}</span>
+                  <span className="font-medium">{err.serviceName}</span>
                 </div>
-              )) : (
-                <div className="text-center text-muted-foreground py-8">No recent errors</div>
-              )}
-            </div>
+                <span className="text-sm text-destructive">{err.operationName}</span>
+              </div>
+            )) : (
+              <div className="text-center text-muted-foreground py-8">No recent errors</div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
