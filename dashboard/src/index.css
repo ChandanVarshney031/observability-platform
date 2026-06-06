@@ -2,31 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  box-sizing: border-box;
+@layer base {
+  :root {
+    --background: 226 21% 7%; /* #0F1117 */
+    --foreground: 210 40% 98%;
+    
+    --card: 226 20% 12%; /* #1A1D27 */
+    --card-foreground: 210 40% 98%;
+    
+    --popover: 226 20% 12%;
+    --popover-foreground: 210 40% 98%;
+    
+    --primary: 217 91% 60%; /* #3B82F6 */
+    --primary-foreground: 210 40% 98%;
+    
+    --secondary: 226 20% 20%;
+    --secondary-foreground: 210 40% 98%;
+    
+    --muted: 226 20% 20%;
+    --muted-foreground: 215 20% 65%;
+    
+    --accent: 217 91% 60%;
+    --accent-foreground: 210 40% 98%;
+    
+    --destructive: 0 84% 60%; /* #EF4444 */
+    --destructive-foreground: 210 40% 98%;
+    
+    --success: 160 84% 39%; /* #10B981 */
+    --success-foreground: 210 40% 98%;
+
+    --border: 226 19% 20%; /* #2A2D3E */
+    --input: 226 19% 20%;
+    --ring: 217 91% 60%;
+    
+    --radius: 0.5rem;
+  }
 }
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-.react-flow__node {
-  background: #1e293b;
-  border: 2px solid #475569;
-  border-radius: 8px;
-  color: #e2e8f0;
-}
-
-.react-flow__edge-path {
-  stroke: #64748b;
-}
-
-.react-flow__attribution {
-  bottom: 4px;
-  left: 4px;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
 }

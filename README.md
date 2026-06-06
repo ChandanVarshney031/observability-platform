@@ -70,7 +70,8 @@ After ~60s of traffic: traces appear. After ~2 min: AI insights appear in the si
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     INSTRUMENTED MICROSERVICES                      │
-│   api-gateway (Node.js)  │  order-service (Python)  │  payment (Node.js) │
+│   api-gateway (Node.js)  │  order-service (Node.js) │  payment (Node.js) │
+│   inventory-service      │  notification-service    │                    │
 │   OTel SDK auto-instruments HTTP calls, emits spans via gRPC       │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ OTLP/gRPC
@@ -110,7 +111,7 @@ After ~60s of traffic: traces appear. After ~2 min: AI insights appear in the si
    ┌──────────────────────┐        │  • Trace Explorer     │
    │  Groq Cloud API       │        │  • Service Graph      │
    │  llama3-8b-8192       │        │  • Metrics + Alerts   │
-   │  (free tier)          │        │  • AI Insights Sidebar│
+   │  (free tier)          │        │  • AI Insights Feed   │
    └──────────┬────────────┘        └──────────────────────┘
               │ saves insight
               ▼
@@ -122,7 +123,9 @@ After ~60s of traffic: traces appear. After ~2 min: AI insights appear in the si
 ```
 Load Generator
   → API Gateway (port 3000)
-    → order-service (port 5000) + payment-service (port 3001)
+    → order-service (port 5000) -> inventory-service (port 5001)
+    → payment-service (port 3001) -> Razorpay
+    → notification-service (port 5002) -> SMTP
       → OTel spans → Collector (port 4317)
         → Kafka (3 topics)
           → Kafka Consumer → ClickHouse
@@ -137,16 +140,15 @@ Load Generator
 
 ```
 observability-platform/
-├── services/
-│   ├── api-gateway/          # Node.js + Express — public API, calls other services
-│   │   ├── tracing.js        # OTel SDK (loaded via --import flag)
-│   │   └── app.js            # Routes: GET /order/:id, GET /pay/:orderId
-│   ├── order-service/        # Python FastAPI — returns fake orders, 5% error rate
-│   │   ├── tracing.py        # OTel SDK for Python
-│   │   └── main.py           # FastAPI app
-│   └── payment-service/      # Node.js + Express — payment sim, 8% timeout rate
-│       ├── tracing.js
-│       └── app.js
+├── services/                 # Single Monorepo for Node.js Services
+│   ├── Dockerfile            # Multi-service Dockerfile
+│   ├── package.json          # Shared dependencies
+│   ├── tracing.js            # OTel auto-instrumentation init
+│   ├── api-gateway/          # Port 3000: Handles `/checkout` and routes
+│   ├── order-service/        # Port 5000: Writes orders to PostgreSQL
+│   ├── inventory-service/    # Port 5001: Manages product stock (PostgreSQL)
+│   ├── payment-service/      # Port 3001: Integrates with Razorpay test mode
+│   └── notification-service/ # Port 5002: Sends emails via Nodemailer
 │
 ├── collector/
 │   └── otelcol-config.yaml   # OTel Collector: OTLP → Kafka (traces/metrics/logs)
@@ -155,27 +157,21 @@ observability-platform/
 │   └── index.js              # Reads Kafka topics → bulk-inserts into ClickHouse
 │
 ├── query-api/
-│   ├── index.js              # REST API: /api/traces, /api/services, /api/metrics,
-│   │                         #           /api/alerts, /api/insights, /api/insights/:id
+│   ├── index.js              # REST API for the dashboard
 │   └── workers/
 │       └── trace-analyser.js # Background worker: error traces → Groq → trace_insights
 │
-├── dashboard/
+├── dashboard/                # Rebuilt with Vite, React, TS, Tailwind, shadcn/ui
 │   └── src/
-│       ├── App.js            # Router + layout (Navbar + AI sidebar)
-│       ├── pages/
-│       │   ├── TraceExplorer.js   # Trace list + waterfall detail panel
-│       │   ├── ServiceGraph.js    # react-flow dependency graph (dagre layout)
-│       │   └── MetricsView.js     # Recharts latency/error-rate + alerts
-│       └── components/
-│           ├── Navbar.js
-│           └── AIInsightsSidebar.js  # Right panel, polls /api/insights every 15s
+│       ├── main.tsx          # React Entry
+│       ├── pages/            # Dashboard, Traces, Services, Metrics, AiInsights
+│       └── components/       # shadcn/ui components and layouts
 │
 └── infra/
-    ├── docker-compose.yml    # Full stack — 10 services
-    ├── .env                  # YOUR GROQ_API_KEY goes here (gitignored)
+    ├── docker-compose.yml    # Full stack — 12 services (including Postgres)
+    ├── .env                  # YOUR GROQ_API_KEY, RAZORPAY_KEY, SMTP_PASS goes here
     ├── .env.example          # Template — safe to commit
-    ├── load-gen.sh           # Continuous traffic generator
+    ├── load-gen.sh           # Continuous e-commerce checkout traffic generator
     └── clickhouse/
         └── init.sql          # Schema DDL + materialised views + helper views
 ```

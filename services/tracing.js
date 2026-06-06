@@ -5,7 +5,7 @@ import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 
 const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4317';
-const serviceName = process.env.SERVICE_NAME || 'api-gateway';
+const serviceName = process.env.SERVICE_NAME || 'unknown-service';
 const environment = process.env.OTEL_RESOURCE_ATTRIBUTES || 'deployment.environment=dev';
 
 const traceExporter = new OTLPTraceExporter({ url: otelEndpoint });
@@ -36,6 +36,6 @@ process.on('SIGTERM', () => {
   sdk
     .shutdown()
     .then(() => console.log('Tracing terminated'))
-    .catch((log) => console.log('Error terminating tracing', log))
+    .catch((log) => console.error('Error terminating tracing', log))
     .finally(() => process.exit(0));
 });
