@@ -1,146 +1,93 @@
-// Tracing is now loaded via Node CLI flag (--import)
-
 import express from 'express';
 import axios from 'axios';
+import jwt from 'jsonwebtoken';
+import cors from 'cors';
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 const ORDER_SERVICE_URL = process.env.ORDER_SERVICE_URL || 'http://order-service:5000';
 const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL || 'http://payment-service:3001';
+const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL || 'http://inventory-service:5001';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:5002';
 
-// Middleware
 app.use(express.json());
+app.use(cors());
 
-// Health check
+// Optional JWT Middleware
+const authenticate = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+        const token = authHeader.split(' ')[1];
+        jwt.verify(token, 'secret_key', (err, user) => {
+            if (err) { return res.sendStatus(403); }
+            req.user = user;
+            next();
+        });
+    } else {
+        // Mock user for testing
+        req.user = { email: 'customer@example.com', name: 'Test User' };
+        next();
+    }
+};
+
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'api-gateway' });
 });
 
-/**
- * GET /order/:id
- * Calls order-service and returns order details
- * Simulates: 50-300ms processing delay, 10% error rate
- */
-app.get('/order/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Simulate processing delay
-    const delay = Math.random() * 250 + 50;
-    await new Promise((resolve) => setTimeout(resolve, delay));
-
-    // Simulate 10% error rate
-    if (Math.random() < 0.1) {
-      return res.status(500).json({
-        error: 'Failed to fetch order - simulated error',
-        traceId: req.headers['traceparent'],
-      });
+app.get('/products', async (req, res) => {
+    try {
+        const response = await axios.get(`${INVENTORY_SERVICE_URL}/products`, {
+            headers: { 'traceparent': req.headers['traceparent'] || '' }
+        });
+        res.json(response.data);
+    } catch (err) {
+        res.status(500).json({ error: err.message, service: 'api-gateway' });
     }
-
-    // Call order-service
-    const response = await axios.get(`${ORDER_SERVICE_URL}/order/${id}`, {
-      timeout: 5000,
-      headers: {
-        'traceparent': req.headers['traceparent'] || '',
-      },
-    });
-
-    res.json({
-      order: response.data,
-      gateway_processed: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Error fetching order:', error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.message,
-      service: 'api-gateway',
-    });
-  }
 });
 
-/**
- * GET /pay/:orderId
- * Calls payment-service to process payment
- * Simulates: 100-400ms delay, 8% timeout rate
- */
-app.get('/pay/:orderId', async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const amount = req.query.amount || 100;
+app.post('/checkout', authenticate, async (req, res) => {
+    try {
+        const { items } = req.body;
+        const tp = req.headers['traceparent'] || '';
 
-    // Simulate 8% timeout
-    if (Math.random() < 0.08) {
-      return res.status(504).json({
-        error: 'Payment service timeout - simulated',
-      });
+        // 1. Create order
+        const orderRes = await axios.post(`${ORDER_SERVICE_URL}/orders`, {
+            customer: req.user.name,
+            email: req.user.email,
+            items
+        }, { headers: { 'traceparent': tp }});
+        
+        const { orderId, total } = orderRes.data;
+
+        // 2. Process payment
+        const paymentRes = await axios.post(`${PAYMENT_SERVICE_URL}/pay`, {
+            orderId, amount: total
+        }, { headers: { 'traceparent': tp }});
+
+        // 3. Mark as paid
+        await axios.put(`${ORDER_SERVICE_URL}/orders/${orderId}/pay`, {}, {
+            headers: { 'traceparent': tp }
+        });
+
+        // 4. Send notification
+        await axios.post(`${NOTIFICATION_SERVICE_URL}/send`, {
+            email: req.user.email,
+            orderId,
+            status: 'paid'
+        }, { headers: { 'traceparent': tp }});
+
+        res.json({ success: true, orderId, transactionId: paymentRes.data.transactionId });
+    } catch (err) {
+        console.error('Checkout error:', err.message);
+        res.status(err.response?.status || 500).json({ 
+            error: err.message,
+            service: 'api-gateway'
+        });
     }
-
-    // Call payment-service
-    const response = await axios.post(
-      `${PAYMENT_SERVICE_URL}/pay`,
-      {
-        orderId,
-        amount,
-      },
-      {
-        timeout: 5000,
-        headers: {
-          'traceparent': req.headers['traceparent'] || '',
-        },
-      }
-    );
-
-    res.json({
-      payment: response.data,
-      gateway_processed: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Error processing payment:', error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.message,
-      service: 'api-gateway',
-    });
-  }
-});
-
-/**
- * GET /trace-test
- * Calls both order and payment services in sequence
- */
-app.get('/trace-test/:orderId', async (req, res) => {
-  try {
-    const { orderId } = req.params;
-
-    // Fetch order
-    const orderRes = await axios.get(`${ORDER_SERVICE_URL}/order/${orderId}`, {
-      timeout: 5000,
-    });
-
-    // Process payment
-    const paymentRes = await axios.post(
-      `${PAYMENT_SERVICE_URL}/pay`,
-      {
-        orderId,
-        amount: 100,
-      },
-      { timeout: 5000 }
-    );
-
-    res.json({
-      order: orderRes.data,
-      payment: paymentRes.data,
-      trace_complete: true,
-    });
-  } catch (error) {
-    console.error('Error in trace test:', error.message);
-    res.status(error.response?.status || 500).json({
-      error: error.message,
-    });
-  }
 });
 
 app.listen(port, () => {
-  console.log(`🚀 API Gateway running on http://localhost:${port}`);
-  console.log(`📊 OTel Collector: ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4317'}`);
+    console.log(`🚀 API Gateway on http://localhost:${port}`);
+    console.log(`📊 OTel Collector: ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4317'}`);
 });
