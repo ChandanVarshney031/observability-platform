@@ -1,6 +1,5 @@
 import { Kafka, logLevel } from 'kafkajs';
 import axios from 'axios';
-import { readableTraceProtoFromBinary } from '@opentelemetry/otlp-transformer';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -81,45 +80,43 @@ async function insertTraces(spans) {
 }
 
 /**
- * Parse OTLP trace protobuf and flatten to individual spans
+ * Parse OTLP JSON trace message and flatten to individual spans.
+ * The collector encodes as otlp_json so messages are plain JSON strings.
  */
 function parseTraceMessage(buffer) {
   try {
-    // Use otlp-transformer to decode protobuf
-    const decoded = readableTraceProtoFromBinary(buffer);
-
+    const decoded = JSON.parse(buffer.toString('utf8'));
     const spans = [];
 
-    if (decoded.resourceSpans) {
-      for (const resourceSpan of decoded.resourceSpans) {
-        const serviceName =
-          resourceSpan.resource?.attributes?.find(
-            (attr) => attr.key === 'service.name'
-          )?.value?.stringValue || 'unknown';
+    const resourceSpans = decoded.resourceSpans || decoded.resource_spans || [];
+    for (const resourceSpan of resourceSpans) {
+      // Extract service name from resource attributes
+      const attrs = resourceSpan.resource?.attributes || [];
+      const serviceAttr = attrs.find(
+        (a) => a.key === 'service.name'
+      );
+      const serviceName = serviceAttr?.value?.stringValue ||
+        serviceAttr?.value?.string_value || 'unknown';
 
-        if (resourceSpan.scopeSpans) {
-          for (const scopeSpan of resourceSpan.scopeSpans) {
-            if (scopeSpan.spans) {
-              for (const span of scopeSpan.spans) {
-                spans.push({
-                  traceId: Buffer.from(span.traceId).toString('hex'),
-                  spanId: Buffer.from(span.spanId).toString('hex'),
-                  parentSpanId: span.parentSpanId
-                    ? Buffer.from(span.parentSpanId).toString('hex')
-                    : '',
-                  serviceName,
-                  operationName: span.name,
-                  startTimeUnixNano: span.startTimeUnixNano,
-                  endTimeUnixNano: span.endTimeUnixNano,
-                  durationNano:
-                    (span.endTimeUnixNano || 0) -
-                    (span.startTimeUnixNano || 0),
-                  statusCode: span.status?.code || 0,
-                  statusMessage: span.status?.message || '',
-                });
-              }
-            }
-          }
+      const scopeSpans = resourceSpan.scopeSpans || resourceSpan.scope_spans || [];
+      for (const scopeSpan of scopeSpans) {
+        const rawSpans = scopeSpan.spans || [];
+        for (const span of rawSpans) {
+          // traceId / spanId arrive as hex strings in otlp_json
+          spans.push({
+            traceId:      span.traceId      || span.trace_id      || '',
+            spanId:       span.spanId       || span.span_id       || '',
+            parentSpanId: span.parentSpanId || span.parent_span_id || '',
+            serviceName,
+            operationName: span.name || 'unknown',
+            startTimeUnixNano: BigInt(span.startTimeUnixNano || span.start_time_unix_nano || 0),
+            endTimeUnixNano:   BigInt(span.endTimeUnixNano   || span.end_time_unix_nano   || 0),
+            durationNano:
+              BigInt(span.endTimeUnixNano   || span.end_time_unix_nano   || 0) -
+              BigInt(span.startTimeUnixNano || span.start_time_unix_nano || 0),
+            statusCode:    span.status?.code    || 0,
+            statusMessage: span.status?.message || '',
+          });
         }
       }
     }

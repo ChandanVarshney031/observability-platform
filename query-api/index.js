@@ -30,13 +30,18 @@ app.get('/health', (req, res) => {
 /**
  * Helper: Execute ClickHouse query
  */
+// Ensure CLICKHOUSE_URL always ends with '/' so the HTTP interface works correctly
+const CLICKHOUSE_BASE = CLICKHOUSE_URL.endsWith('/') ? CLICKHOUSE_URL : `${CLICKHOUSE_URL}/`;
+
 async function queryClickHouse(sql, format = 'JSON') {
   try {
-    const response = await axios.post(
-      `${CLICKHOUSE_URL}?query=${encodeURIComponent(sql)}&format=${format}`,
-      null,
-      { timeout: 10000 }
-    );
+    // POST the SQL as request body with FORMAT appended — works on all ClickHouse versions.
+    // The ?format= URL parameter was removed in ClickHouse 24.x.
+    const query = `${sql.trim()} FORMAT ${format}`;
+    const response = await axios.post(CLICKHOUSE_BASE, query, {
+      headers: { 'Content-Type': 'text/plain' },
+      timeout: 10000,
+    });
     return response.data;
   } catch (error) {
     console.error('ClickHouse query error:', error.message);
