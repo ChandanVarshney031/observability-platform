@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
-COPY index.js .
+COPY index.js helpers.js ./
 
 ENV PORT=4000
 ENV CLICKHOUSE_URL=http://clickhouse:8123

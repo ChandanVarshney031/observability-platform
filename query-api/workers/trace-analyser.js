@@ -17,7 +17,7 @@ const OLLAMA_MODEL = process.env.MODEL || 'tinyllama';
 
 // Groq config (cloud, free tier, zero local storage — needs API key)
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama3-8b-8192';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 console.log(`🧠 LLM Provider: ${LLM_PROVIDER.toUpperCase()}`);
@@ -27,18 +27,30 @@ if (LLM_PROVIDER === 'mock')   console.log(`   Using mock responses (no LLM)`);
 
 // ── ClickHouse helpers ───────────────────────────────────────────────────────
 
+// Ensure CLICKHOUSE_URL always ends with '/' so the HTTP interface works correctly
+const CLICKHOUSE_BASE = CLICKHOUSE_URL.endsWith('/') ? CLICKHOUSE_URL : `${CLICKHOUSE_URL}/`;
+
 async function queryClickHouse(sql) {
   try {
-    const response = await axios.post(
-      `${CLICKHOUSE_URL}?query=${encodeURIComponent(sql)}&format=JSON`,
-      null,
-      { timeout: 5000 }
-    );
+    // POST the SQL as request body with FORMAT appended — the ?query=...&format=
+    // URL-param style was removed in ClickHouse 24.x (matches query-api/index.js).
+    const query = `${sql.trim()} FORMAT JSON`;
+    const response = await axios.post(CLICKHOUSE_BASE, query, {
+      headers: { 'Content-Type': 'text/plain' },
+      timeout: 5000,
+    });
     return response.data.data || [];
   } catch (error) {
     console.error('Error querying ClickHouse:', error.message);
     return [];
   }
+}
+
+async function execClickHouse(sql) {
+  await axios.post(CLICKHOUSE_BASE, sql.trim(), {
+    headers: { 'Content-Type': 'text/plain' },
+    timeout: 5000,
+  });
 }
 
 async function getUnanalysedErrorTraces() {
@@ -90,11 +102,7 @@ async function storeAnalysis(trace, analysis) {
   `;
 
   try {
-    await axios.post(
-      `${CLICKHOUSE_URL}?query=${encodeURIComponent(sql)}`,
-      null,
-      { timeout: 5000 }
-    );
+    await execClickHouse(sql);
     console.log(`✓ Stored analysis for trace ${trace.TraceId}`);
   } catch (error) {
     console.error('Error storing analysis:', error.message);
