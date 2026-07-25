@@ -1,10 +1,14 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { escSql } from '../../shared/sql-utils.js';
 
 dotenv.config();
 
 const CLICKHOUSE_URL = process.env.CLICKHOUSE_URL || 'http://clickhouse:8123';
 const ANALYSIS_INTERVAL = parseInt(process.env.ANALYSIS_INTERVAL || '60000', 10);
+// Cap retries on traces whose LLM analysis keeps failing (bad prompt, persistent
+// rate limit, etc.) so they don't get re-attempted forever on every poll cycle.
+const MAX_ANALYSIS_ATTEMPTS = parseInt(process.env.ANALYSIS_MAX_ATTEMPTS || '3', 10);
 
 // ── LLM Provider configuration ──────────────────────────────────────────────
 // Set LLM_PROVIDER to "groq", "ollama", or "mock" in your environment.
@@ -75,6 +79,10 @@ async function getUnanalysedErrorTraces() {
     WHERE t.StatusCode = 2
       AND t.StartTime > now() - INTERVAL 5 MINUTE
       AND t.TraceId NOT IN (SELECT TraceId FROM trace_insights)
+      AND t.TraceId NOT IN (
+        SELECT TraceId FROM analysis_attempts
+        GROUP BY TraceId HAVING count() >= ${MAX_ANALYSIS_ATTEMPTS}
+      )
     GROUP BY t.TraceId, t.ServiceName, t.OperationName, t.StartTime, t.StatusMessage
     ORDER BY t.StartTime DESC
     LIMIT 10
@@ -82,9 +90,19 @@ async function getUnanalysedErrorTraces() {
   return queryClickHouse(sql);
 }
 
-async function storeAnalysis(trace, analysis) {
-  const escSql = (v) => String(v ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+async function recordAnalysisAttempt(traceId) {
+  const sql = `
+    INSERT INTO analysis_attempts (TraceId, AttemptedAt)
+    VALUES ('${escSql(traceId)}', now())
+  `;
+  try {
+    await execClickHouse(sql);
+  } catch (error) {
+    console.error('Error recording analysis attempt:', error.message);
+  }
+}
 
+async function storeAnalysis(trace, analysis) {
   const sql = `
     INSERT INTO trace_insights (
       TraceId, ServiceName, OperationName, AnalysedAt,
@@ -255,6 +273,8 @@ async function analyzeErrorTraces() {
       const analysis = await analyzeTraceWithLLM(trace);
       if (analysis) {
         await storeAnalysis(trace, analysis);
+      } else {
+        await recordAnalysisAttempt(trace.TraceId);
       }
       // Throttle — Groq has rate limits; Ollama needs breathing room
       await new Promise((resolve) => setTimeout(resolve, LLM_PROVIDER === 'groq' ? 1000 : 2000));

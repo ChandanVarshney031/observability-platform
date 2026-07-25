@@ -4,13 +4,8 @@
  * without connecting to Kafka/ClickHouse.
  */
 
-/**
- * Safely escape a string for ClickHouse SQL single-quoted values
- */
-export function escSql(value) {
-  if (typeof value !== 'string') return String(value ?? '');
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
+import { escSql } from '../shared/sql-utils.js';
+export { escSql };
 
 function otlpValueToString(value) {
   if (value == null) return '';

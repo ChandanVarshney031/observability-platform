@@ -3,14 +3,8 @@
  * without connecting to Redis or starting the Express server.
  */
 
-/**
- * Safely escape a string value for ClickHouse SQL
- * Prevents SQL injection by escaping single quotes and backslashes
- */
-export function escSql(value) {
-  if (typeof value !== 'string') return String(value);
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
+import { escSql } from '../shared/sql-utils.js';
+export { escSql };
 
 /**
  * Resolve time window string to ClickHouse interval expression

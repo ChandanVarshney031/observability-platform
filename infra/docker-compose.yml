@@ -232,7 +232,8 @@ services:
 
   kafka-consumer:
     build:
-      context: ../kafka-consumer
+      context: ..
+      dockerfile: kafka-consumer/Dockerfile
     depends_on:
       kafka:
         condition: service_healthy
@@ -248,7 +249,8 @@ services:
 
   query-api:
     build:
-      context: ../query-api
+      context: ..
+      dockerfile: query-api/Dockerfile
     ports:
       - "4000:4000"
     depends_on:
@@ -271,8 +273,8 @@ services:
 
   trace-analyser:
     build:
-      context: ../query-api/workers
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: query-api/workers/Dockerfile
     depends_on:
       clickhouse:
         condition: service_healthy
