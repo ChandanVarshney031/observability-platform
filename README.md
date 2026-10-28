@@ -147,7 +147,7 @@ flowchart TB
 | Layer | Technology | Role |
 |:---|:---|:---|
 | Instrumentation | OpenTelemetry SDK (Node.js) | Auto-instrument HTTP, DB, outbound calls |
-| Collection | OTel Collector Contrib `0.92.0` | Batch, limit memory, export to Kafka |
+| Collection | OTel Collector Contrib `0.92.0` | Tail-based sampling, batching, memory limiter, Kafka export |
 | Message broker | Apache Kafka `7.5.3` (Confluent) | Durable telemetry buffer, ingest/storage decoupling |
 | OLAP storage | ClickHouse `24.3` | Columnar trace storage, materialized percentile views |
 | Cache | Redis `7` Alpine | Hot query result caching |
@@ -272,6 +272,7 @@ Application → Collector → Kafka → Consumer → ClickHouse
 
 | Property | Configuration | Effect |
 |:---|:---|:---|
+| Tail-based sampling | 100% errors (StatusCode 2), 100% slow (`>500ms`), 10% healthy | 10x–20x ClickHouse storage reduction; zero error data loss ([docs](collector/README.md)) |
 | Collector batch size | `1,000 spans` / `5s timeout` | Amortizes export overhead |
 | Collector memory cap | `256 MiB` (spike: `128 MiB`) | Prevents OOM during traffic surges |
 | Kafka retry policy | `5s → 30s` backoff, `300s` max elapsed | Survives transient broker issues |
@@ -657,7 +658,7 @@ Contributions are welcome — especially on tail-based sampling, the alerting en
 
 **Areas where help is most valuable:**
 
-- [ ] Tail-based sampling processor in OTel Collector config
+- [x] Tail-based sampling processor in OTel Collector config ([docs](collector/README.md))
 - [ ] PagerDuty webhook integration for `/api/alerts`
 - [ ] Helm chart for Kubernetes deployment
 - [ ] Benchmark suite with reproducible load tests

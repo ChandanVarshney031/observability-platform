@@ -57,7 +57,7 @@ We have three dummy microservices (`api-gateway`, `order-service`, `payment-serv
 *   **Output:** They stream these spans and metrics out via the OTLP protocol.
 
 ### 2. Ingestion Pipeline (`collector/` & `kafka-consumer/`)
-*   **OTel Collector:** Runs in a Docker container and acts as the "front door" for all telemetry data. It receives spans from the microservices, batches them, and pushes them into **Apache Kafka**.
+*   **OTel Collector:** Runs in a Docker container and acts as the "front door" for all telemetry data. It applies **tail-based sampling** (buffering traces for 10s to retain 100% of errors and slow traces while dropping ~90% of healthy traces), batches retained spans, and pushes them into **Apache Kafka**. See [`collector/README.md`](./collector/README.md) for policy details and buffering cost analysis.
 *   **Kafka:** Acts as a massive shock absorber. If a million requests come in at once, Kafka holds the data securely in topics (`otel.traces`, `otel.metrics`) so the database doesn't crash.
 *   **Kafka Consumer:** A custom Node.js script that continuously pulls batches of messages out of Kafka, flattens the nested data structures, and does high-speed bulk inserts into the database.
 

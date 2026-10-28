@@ -7,14 +7,52 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  batch:
-    timeout: 5s
-    send_batch_size: 1000
-    
+  # Gatekeeper: memory_limiter MUST remain first in the pipeline to prevent OOM
+  # crashes before other memory-intensive processors (like tail_sampling) buffer data.
   memory_limiter:
     check_interval: 5s
     limit_mib: 256
     spike_limit_mib: 128
+
+  # Tail-based sampling processor: buffers traces in memory for decision_wait duration
+  # to make complete trace-aware sampling decisions before exporting to Kafka.
+  #
+  # Policies:
+  # 1. error-traces-policy: 100% retention for any trace containing StatusCode 2 (ERROR).
+  # 2. slow-traces-policy: 100% retention for traces exceeding TRACE_LATENCY_THRESHOLD_MS (default 500ms).
+  # 3. healthy-traces-probabilistic-policy: retains TRACE_SAMPLE_PERCENTAGE% of healthy traces (default 10%).
+  #
+  # Cost Trade-offs:
+  # - Latency cost: Traces are buffered for decision_wait (10s) before pipeline emission.
+  # - Memory cost: Buffer size scales with (traces/sec * spans/trace * avg_span_size * decision_wait).
+  #   Protected by memory_limiter (256 MiB limit).
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 10000
+    expected_new_traces_per_sec: 2000
+    policies:
+      # Policy 1: Always retain error traces (StatusCode 2 / ERROR)
+      - name: error-traces-policy
+        type: status_code
+        status_code:
+          status_codes:
+            - ERROR
+
+      # Policy 2: Always retain slow traces above latency threshold
+      - name: slow-traces-policy
+        type: latency
+        latency:
+          threshold_ms: ${env:TRACE_LATENCY_THRESHOLD_MS:-500}
+
+      # Policy 3: Probabilistically sample a configurable percentage of healthy traces
+      - name: healthy-traces-probabilistic-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:TRACE_SAMPLE_PERCENTAGE:-10}
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
 
   resource:
     attributes:
@@ -63,7 +101,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch, resource]
+      processors: [memory_limiter, tail_sampling, batch, resource]
       exporters: [kafka/traces, logging]
 
     metrics:
@@ -75,3 +113,4 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, batch, resource]
       exporters: [kafka/logs, logging]
+
