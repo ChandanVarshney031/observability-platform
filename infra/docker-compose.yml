@@ -88,6 +88,8 @@ services:
       - observability
     environment:
       GOGC: 80
+      TRACE_SAMPLE_PERCENTAGE: ${TRACE_SAMPLE_PERCENTAGE:-10}
+      TRACE_LATENCY_THRESHOLD_MS: ${TRACE_LATENCY_THRESHOLD_MS:-500}
 
   postgres:
     image: postgres:15-alpine
